@@ -109,6 +109,45 @@ int main(void) {
     ck(find_recovery_for(1) == -1, "a recovery entry does not pair with itself");
     ck(count_bootable_rows() == 3, "recovery entries are not counted as menu rows");
 
+    /* --- confirm dialog layout: Boot spans the bottom row --- */
+    {
+        g_entries = rec; g_entry_n = 4;
+        /* idx 0 has a recovery variant (idx 1); idx 2 does not. */
+        for (int variant = 0; variant < 2; variant++) {
+            int idx = variant ? 2 : 0;
+            open_confirm_dialog(idx);
+            lv_obj_update_layout(lv_layer_top());
+
+            lv_obj_t *top = lv_layer_top();
+            lv_obj_t *bd  = lv_obj_get_child(top, lv_obj_get_child_count(top) - 1);
+            lv_obj_t *mb  = lv_obj_get_child(bd, 0);
+            lv_obj_t *ft  = lv_msgbox_get_footer(mb);
+            uint32_t nb = lv_obj_get_child_count(ft);
+            ck(nb == (variant ? 4u : 5u),
+               variant ? "no recovery variant: four buttons"
+                       : "recovery variant present: five buttons");
+
+            /* Boot is created last, so it is the final child. */
+            lv_obj_t *boot = lv_obj_get_child(ft, nb - 1);
+            lv_area_t ba, fa;
+            lv_obj_get_coords(boot, &ba);
+            lv_obj_get_coords(ft, &fa);
+
+            int lowest = 1;
+            for (uint32_t i = 0; i + 1 < nb; i++) {
+                lv_area_t oa; lv_obj_get_coords(lv_obj_get_child(ft, i), &oa);
+                if (oa.y1 >= ba.y1) lowest = 0;
+            }
+            ck(lowest, variant ? "Boot is the bottom-most button (no recovery)"
+                               : "Boot is the bottom-most button (with recovery)");
+            ck(lv_area_get_width(&ba) > (lv_area_get_width(&fa) * 3) / 4,
+               variant ? "Boot spans the row (no recovery)"
+                       : "Boot spans the row (with recovery)");
+            lv_obj_delete(bd);
+            lv_obj_update_layout(lv_layer_top());
+        }
+    }
+
     /* --- removal: the distinct-kernel list --- */
     /* Real menus repeat each release as a plain entry, a "with Linux X"
      * entry and a recovery entry. Removal must offer each RELEASE once,

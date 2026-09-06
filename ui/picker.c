@@ -897,18 +897,18 @@ static void open_confirm_dialog(int idx) {
     snprintf(body, sizeof(body), "Boot into:\n\n%s", g_entries[idx].title);
     lv_msgbox_add_text(mbox, body);
 
-    /* Creation order is layout order. Recovery is created LAST and
-     * spans the final row, so the approved 2x2 (Edit/Set Default over
-     * Boot/Cancel) is untouched and Recovery reads as the extra option
-     * it is. Spanning Cancel instead - the first thing I tried - made
-     * the cancel action the largest, brightest target in the dialog,
-     * which is exactly backwards. */
+    /* Creation order is layout order, and Boot is created LAST so it
+     * spans the bottom row: it is the action taken on virtually every
+     * visit, and the bottom edge is where a thumb already rests on a
+     * tablet this size. The row above pairs Recovery with Cancel when
+     * there is a recovery variant, and otherwise lets Cancel span - a
+     * lone 47% button beside an empty gap reads as a layout bug. */
     int rec = find_recovery_for(idx);
     lv_obj_t *edit_btn = lv_msgbox_add_footer_button(mbox, "Edit");
     lv_obj_t *default_btn = lv_msgbox_add_footer_button(mbox, "Set Default");
-    lv_obj_t *confirm_btn = lv_msgbox_add_footer_button(mbox, "Boot");
-    lv_obj_t *cancel_btn = lv_msgbox_add_footer_button(mbox, "Cancel");
     lv_obj_t *recovery_btn = (rec >= 0) ? lv_msgbox_add_footer_button(mbox, "Recovery") : NULL;
+    lv_obj_t *cancel_btn = lv_msgbox_add_footer_button(mbox, "Cancel");
+    lv_obj_t *confirm_btn = lv_msgbox_add_footer_button(mbox, "Boot");
 
     lv_obj_t *footer = lv_msgbox_get_footer(mbox);
     /* The footer and header classes default to a hardcoded
@@ -952,8 +952,12 @@ static void open_confirm_dialog(int idx) {
     lv_obj_set_style_border_color(confirm_btn, lv_color_hex(0x232c35), 0);
     lv_obj_set_style_border_color(cancel_btn, lv_color_hex(0x232c35), 0);
 
+    /* Boot spans the bottom. Cancel only spans when it has no Recovery
+     * to sit beside. */
+    lv_obj_set_width(confirm_btn, lv_pct(100));
+    if (!recovery_btn) lv_obj_set_width(cancel_btn, lv_pct(100));
+
     if (recovery_btn) {
-        lv_obj_set_width(recovery_btn, lv_pct(100));
         /* Muted rather than accented: it is a deliberate, occasional
          * choice, not something to draw the eye on every boot. */
         lv_obj_set_style_bg_color(recovery_btn, lv_color_hex(0x2a3a4d), 0);
