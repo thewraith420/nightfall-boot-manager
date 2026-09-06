@@ -93,6 +93,10 @@ printf 'Ubuntu old\t/boot/vmlinuz-old\t/boot/initrd.img-old\tro quiet\t\n'
 EOF
   printf '#!/bin/sh\ncat "$1"\n' > "$SB/bin/apply-default.sh"
   printf '#!/bin/sh\nprintf "%s\\tv1\\t120M\\n" /home/bob/k-installer.tar.gz\n' > "$SB/bin/discover-tarballs.sh"
+  # Marks the cmdline so the test can see init used this script's output.
+  # awk, not sed: sed is not a busybox applet in the image, so a sed
+  # mock silently fails under STRICT_BB and the assertion blames init.
+  printf '#!/bin/sh\nawk -F"\\t" -v OFS="\\t" \x27{sub(/ro quiet/,"ro quiet MARKER_SAVED_CL",$4); print}\x27 "$1"\n' > "$SB/bin/apply-cmdline.sh"
   cat > "$SB/bin/install-kernel.sh" <<EOF
 #!/bin/sh
 echo "MARKER_INSTALL_RAN \$2" >&2
@@ -282,6 +286,42 @@ both | grep -q "MARKER_KEXEC"               && ok "still boots afterwards" || ba
 both | grep -q "MARKER_RESCUE"              && bad "dropped to rescue over a failed install" || ok "does not drop to rescue"
 log  | grep -q "INSTALL FAILED"             && ok "log records the failure" || bad "failure not in the log"
 log  | grep -q "MARKER_INSTALL_RAN"          && ok "log captures the install output, not just that it failed" || bad "install output missing from the log"
+
+echo "=== 10. saved per-kernel command lines ==="
+setup cl ok 0 0; run
+log | grep -q "MARKER_SAVED_CL" && ok "apply-cmdline.sh output reaches the booted cmdline" || bad "saved command line not applied"
+
+setup clfail ok 0 0; rm -f "$SB/bin/apply-cmdline.sh"; run
+both | grep -q "MARKER_KEXEC" && ok "boots even with apply-cmdline.sh missing" || bad "an optional script broke the boot"
+both | grep -q "MARKER_RESCUE" && bad "dropped to rescue over an optional feature" || ok "no rescue"
+
+echo "=== 11. SET_CMDLINE: save, then forget ==="
+setup clset ok 0 0
+cat > "$SB/bin/picker" <<'EOF'
+#!/bin/sh
+printf 'SELECTED_LINUX=/boot/vmlinuz-chosen\nSELECTED_INITRD=x\nSELECTED_CMDLINE=y\n'
+printf "SET_CMDLINE='/boot/vmlinuz-chosen\troot=x ro loglevel=7'\n"
+exit 0
+EOF
+chmod +x "$SB/bin/picker"; run
+grep -qx "/boot/vmlinuz-chosen	root=x ro loglevel=7" "$SB/mnt/root/boot/picker-cmdline" 2>/dev/null \
+  && ok "saves the kernel's command line" || bad "not saved: [$(cat "$SB/mnt/root/boot/picker-cmdline" 2>/dev/null)]"
+log | grep -q "saved command line for" && ok "the boot log records it" || bad "not logged"
+
+setup clclr ok 0 0
+printf '/boot/vmlinuz-chosen\told\n/boot/vmlinuz-other\tkeep_me\n' > "$SB/mnt/root/boot/picker-cmdline"
+cat > "$SB/bin/picker" <<'EOF'
+#!/bin/sh
+printf 'SELECTED_LINUX=/boot/vmlinuz-chosen\nSELECTED_INITRD=x\nSELECTED_CMDLINE=y\n'
+printf "SET_CMDLINE='/boot/vmlinuz-chosen\t'\n"
+exit 0
+EOF
+chmod +x "$SB/bin/picker"; run
+grep -q "vmlinuz-chosen" "$SB/mnt/root/boot/picker-cmdline" 2>/dev/null \
+  && bad "forgetting left the old entry behind" || ok "an empty value forgets that kernel"
+grep -qx "/boot/vmlinuz-other	keep_me" "$SB/mnt/root/boot/picker-cmdline" 2>/dev/null \
+  && ok "another kernel's saved line is untouched" || bad "clobbered a different kernel"
+log | grep -q "cleared the saved command line" && ok "logged as a clear, not a save" || bad "wrong log line"
 
 echo "=== 10. RELOAD: picker installed it itself, only wants a refresh ==="
 rm -f /tmp/pickruns; setup rel reload 0 0; run

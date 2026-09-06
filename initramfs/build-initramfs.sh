@@ -54,7 +54,7 @@ picker_bin=$repo/ui/picker
 
 for f in "$here/init" "$here/discover-kernels.sh" "$here/apply-default.sh" \
          "$here/discover-tarballs.sh" "$here/install-kernel.sh" \
-         "$here/remove-kernel.sh" \
+         "$here/remove-kernel.sh" "$here/apply-cmdline.sh" \
          "$repo/boot-integration/kexec-boot.sh"; do
     [ -r "$f" ] || die "missing source file: $f"
 done
@@ -89,6 +89,7 @@ install -m 0755 "$here/apply-default.sh"            "$staging/bin/apply-default.
 install -m 0755 "$here/discover-tarballs.sh"        "$staging/bin/discover-tarballs.sh"
 install -m 0755 "$here/install-kernel.sh"           "$staging/bin/install-kernel.sh"
 install -m 0755 "$here/remove-kernel.sh"            "$staging/bin/remove-kernel.sh"
+install -m 0755 "$here/apply-cmdline.sh"            "$staging/bin/apply-cmdline.sh"
 install -m 0755 "$repo/boot-integration/kexec-boot.sh" "$staging/sbin/kexec-boot.sh"
 
 # ------------------------------------------------------------ shared libraries

@@ -53,10 +53,19 @@ The menu opens on three choices: **Boot a kernel**, which lists everything
 found in `grub.cfg`; **Install a kernel**, which lists kernel tarballs found
 on the real system; and **Remove a kernel**.
 
-Tapping a kernel opens a confirm dialog with **Boot**, **Cancel**, **Edit**
-(change this boot's kernel command line via an on-screen keyboard, one-time,
-not persisted), **Set Default** (persist this kernel as the first entry for
-future boots), and **Recovery** where a recovery variant exists.
+Tapping a kernel opens a confirm dialog with **Boot**, **Cancel**, **Edit**,
+**Set Default** (persist this kernel as the first entry for future boots), and
+**Recovery** where a recovery variant exists.
+
+**Edit** opens the kernel command line in an on-screen keyboard, and offers
+**Use once** or **Save for this kernel**. Saved lines are per kernel, so a
+debug kernel can carry extra logging while the one beside it stays clean, and
+**Forget saved** drops back to whatever `grub.cfg` says. They live in
+`/boot/picker-cmdline`, not in `grub.cfg`, so they survive `update-grub` and
+deleting the file reverts everything. Recovery entries are never overridden -
+several menu entries share one kernel image, and pushing a saved line onto the
+recovery entry would break the thing you reach for when a saved line turns out
+to be a mistake.
 
 GRUB emits a recovery entry beside most normal ones — same kernel, a cmdline
 with `recovery nomodeset`. Listing both doubles the menu for something you

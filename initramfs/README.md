@@ -80,6 +80,20 @@ on selection.
   `test-remove-kernel.sh` covers all of that against a fake root, and
   most of its 18 assertions are cases where the right answer is "refuse
   and change nothing".
+- `apply-cmdline.sh` - applies each kernel's saved command line from
+  `/boot/picker-cmdline` (`<vmlinuz path>\t<cmdline>`), replacing the
+  cmdline field for that kernel's rows. A whole-line override rather
+  than a merge, because that is what Edit hands back: the user saw the
+  complete command line and edited it, so what they saved *is* the
+  answer - merging would silently reinstate arguments they had just
+  deleted. **Recovery rows are never overridden**: several menu entries
+  share one kernel image, so keying on the image alone would push the
+  normal command line onto the recovery entry, replacing
+  `ro recovery nomodeset` and quietly breaking the thing you reach for
+  when a saved command line turns out to be a mistake. Nothing in
+  `grub.cfg` is touched, so this survives `update-grub` and deleting the
+  file reverts cleanly. A missing file passes every row through
+  untouched. `test-cmdline.sh` covers it, 10 assertions.
 - `discover-kernels.sh` - parses a GRUB config for `menuentry` stanzas at
   any nesting depth (real kernels turned out to live inside an "Advanced
   options" submenu, not flat - see `docs/nocturne-grub.cfg`) into a

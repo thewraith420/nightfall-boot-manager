@@ -109,6 +109,31 @@ int main(void) {
     ck(find_recovery_for(1) == -1, "a recovery entry does not pair with itself");
     ck(count_bootable_rows() == 3, "recovery entries are not counted as menu rows");
 
+    /* --- saved per-kernel command lines --- */
+    {
+        FILE *sf = fopen("/tmp/mock-saved-cmdline", "w");
+        fprintf(sf, "/boot/vmlinuz-7.1.12\troot=x ro loglevel=7\n");
+        fprintf(sf, "/boot/vmlinuz-EMPTY\t\n");          /* not an override */
+        fprintf(sf, "no-tab-here\n");                      /* malformed */
+        fclose(sf);
+        g_saved_n = 0;
+        load_saved_cmdlines("/tmp/mock-saved-cmdline");
+        ck(g_saved_n == 1, "only well-formed, non-empty entries count as saved");
+        ck(has_saved_cmdline("/boot/vmlinuz-7.1.12"), "recognises a kernel with a saved command line");
+        ck(!has_saved_cmdline("/boot/vmlinuz-EMPTY"), "an empty value is not an override");
+        ck(!has_saved_cmdline("/boot/vmlinuz-nope"), "an unknown kernel has none");
+
+        g_setcl_set = 0;
+        remember_cmdline("/boot/vmlinuz-7.1.12", "root=x ro debug");
+        ck(g_setcl_set, "saving marks a change to persist");
+        ck(strchr(g_setcl, '\t') != NULL, "SET_CMDLINE is tab-separated as init expects");
+        ck(!strcmp(strchr(g_setcl, '\t') + 1, "root=x ro debug"), "carries the edited text");
+        remember_cmdline("/boot/vmlinuz-7.1.12", "");
+        ck(*(strchr(g_setcl, '\t') + 1) == '\0', "forgetting sends an empty value");
+        remove("/tmp/mock-saved-cmdline");
+        g_saved_n = 0; g_setcl_set = 0;
+    }
+
     /* --- confirm dialog layout: Boot spans the bottom row --- */
     {
         g_entries = rec; g_entry_n = 4;

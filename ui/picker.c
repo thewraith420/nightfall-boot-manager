@@ -779,10 +779,71 @@ static void edit_close(struct edit_ctx *ctx) {
     free(ctx);
 }
 
-static void edit_save_cb(lv_event_t *e) {
-    struct edit_ctx *ctx = lv_event_get_user_data(e);
-    snprintf(g_entries[ctx->idx].cmdline, sizeof(g_entries[ctx->idx].cmdline), "%s", lv_textarea_get_text(ctx->ta));
+/* Kernels that already have a saved command line, read from the same
+ * file init applies. picker cannot infer this from the menu, because by
+ * the time it sees a row the override has already been folded into the
+ * cmdline field - which is deliberate (what Edit shows is what boots),
+ * but leaves no way to tell "saved" from "straight out of grub.cfg".
+ * Only used to decide whether to offer "Forget saved". */
+static char g_saved_keys[MAX_ENTRIES][256];
+static int  g_saved_n;
+
+static void load_saved_cmdlines(const char *path) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) return;
+    char line[1200];
+    while (g_saved_n < MAX_ENTRIES && fgets(line, sizeof(line), fp)) {
+        line[strcspn(line, "\n")] = '\0';
+        char *tab = strchr(line, '\t');
+        if (!tab || tab == line) continue;
+        *tab = '\0';
+        if (tab[1] == '\0') continue;         /* empty value is not an override */
+        /* Bounded explicitly - the line buffer is far larger than the
+         * key. A path this long is not a real kernel path anyway. */
+        snprintf(g_saved_keys[g_saved_n], sizeof(g_saved_keys[0]), "%.255s", line);
+        g_saved_n++;
+    }
+    fclose(fp);
+}
+
+static int has_saved_cmdline(const char *kernel) {
+    for (int i = 0; i < g_saved_n; i++)
+        if (!strcmp(g_saved_keys[i], kernel)) return 1;
+    return 0;
+}
+
+/* Persisted on exit, so an edit survives the trip back through the
+ * confirm dialog. "<kernel>\t<cmdline>", or "<kernel>\t" to forget. */
+static char g_setcl[1024];
+static int  g_setcl_set;
+
+static void remember_cmdline(const char *kernel, const char *cmdline) {
+    snprintf(g_setcl, sizeof(g_setcl), "%s\t%s", kernel, cmdline ? cmdline : "");
+    g_setcl_set = 1;
+}
+
+/* Applies the edited text to this boot. Shared by both accept paths -
+ * saving without also using it now would be a surprise. */
+static void edit_apply(struct edit_ctx *ctx, int persist) {
+    const char *text = lv_textarea_get_text(ctx->ta);
     int idx = ctx->idx;
+    snprintf(g_entries[idx].cmdline, sizeof(g_entries[idx].cmdline), "%s", text);
+    if (persist) remember_cmdline(g_entries[idx].linux_path, text);
+    edit_close(ctx);
+    open_confirm_dialog(idx);
+}
+
+static void edit_once_cb(lv_event_t *e)  { edit_apply(lv_event_get_user_data(e), 0); }
+static void edit_save_cb(lv_event_t *e)  { edit_apply(lv_event_get_user_data(e), 1); }
+
+/* Forgets the saved command line without changing this boot: the
+ * original text is gone by now (init folded the override into the menu
+ * before picker ever saw it), so there is nothing to restore here. The
+ * next boot reads grub.cfg again. */
+static void edit_forget_cb(lv_event_t *e) {
+    struct edit_ctx *ctx = lv_event_get_user_data(e);
+    int idx = ctx->idx;
+    remember_cmdline(g_entries[idx].linux_path, "");
     edit_close(ctx);
     open_confirm_dialog(idx);
 }
@@ -810,7 +871,7 @@ static void edit_cb(lv_event_t *e) {
      * character command line, not a kernel title. */
     lv_obj_set_width(ctx->mbox, lv_pct(92));
     lv_msgbox_add_title(ctx->mbox, "Edit boot command line");
-    lv_msgbox_add_text(ctx->mbox, "One-time change - not saved for next boot.");
+    lv_msgbox_add_text(ctx->mbox, "Use once, or save it for this kernel on every boot.");
 
     ctx->ta = lv_textarea_create(lv_msgbox_get_content(ctx->mbox));
     /* NOT one_line: a real cmdline here is 250+ characters, and in
@@ -856,14 +917,38 @@ static void edit_cb(lv_event_t *e) {
     lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
     lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, 16);
 
-    lv_obj_t *save_btn = lv_msgbox_add_footer_button(ctx->mbox, "Save");
+    /* Two ways to accept, because they mean different things: use it
+     * for this boot, or remember it for this kernel every boot. The
+     * old single "Save" was the former while reading like the latter. */
+    int saved = has_saved_cmdline(g_entries[idx].linux_path);
+    lv_obj_t *once_btn   = lv_msgbox_add_footer_button(ctx->mbox, "Use once");
+    lv_obj_t *save_btn   = lv_msgbox_add_footer_button(ctx->mbox, "Save for this kernel");
+    lv_obj_t *forget_btn = saved ? lv_msgbox_add_footer_button(ctx->mbox, "Forget saved") : NULL;
     lv_obj_t *cancel_btn = lv_msgbox_add_footer_button(ctx->mbox, "Cancel");
+
+    lv_obj_t *efooter = lv_msgbox_get_footer(ctx->mbox);
     /* Same 43px hardcoded footer/header height as the confirm dialog. */
-    lv_obj_set_height(lv_msgbox_get_footer(ctx->mbox), LV_SIZE_CONTENT);
+    lv_obj_set_height(efooter, LV_SIZE_CONTENT);
     lv_obj_set_height(lv_msgbox_get_header(ctx->mbox), LV_SIZE_CONTENT);
-    lv_obj_set_height(save_btn, DIALOG_BTN_H);
-    lv_obj_set_height(cancel_btn, DIALOG_BTN_H);
+    lv_obj_set_flex_flow(efooter, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_column(efooter, DIALOG_BTN_GAP, 0);
+    lv_obj_set_style_pad_row(efooter, DIALOG_BTN_GAP, 0);
+
+    lv_obj_t *ebtns[4] = { once_btn, save_btn, forget_btn, cancel_btn };
+    for (int i = 0; i < 4; i++) {
+        if (!ebtns[i]) continue;
+        lv_obj_set_width(ebtns[i], lv_pct(DIALOG_BTN_W_PCT));
+        lv_obj_set_height(ebtns[i], DIALOG_BTN_H);
+    }
+    /* With no saved override there are three buttons, so Cancel would
+     * sit alone at 47% beside a gap - span it instead, same rule the
+     * confirm dialog uses. */
+    if (!forget_btn) lv_obj_set_width(cancel_btn, lv_pct(100));
+    if (forget_btn) lv_obj_set_style_text_color(forget_btn, lv_color_hex(0xd9c48a), 0);
+
+    lv_obj_add_event_cb(once_btn, edit_once_cb, LV_EVENT_CLICKED, ctx);
     lv_obj_add_event_cb(save_btn, edit_save_cb, LV_EVENT_CLICKED, ctx);
+    if (forget_btn) lv_obj_add_event_cb(forget_btn, edit_forget_cb, LV_EVENT_CLICKED, ctx);
     lv_obj_add_event_cb(cancel_btn, edit_cancel_cb, LV_EVENT_CLICKED, ctx);
 
     /* On hardware the textarea came up blank until the first keystroke,
@@ -1533,7 +1618,7 @@ static int wait_for_device(const char *what, struct drm_dev *drm, struct touch_d
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <menu.tsv> [tarballs.tsv]\n", argv[0]);
+        fprintf(stderr, "usage: %s <menu.tsv> [tarballs.tsv] [saved-cmdline.tsv]\n", argv[0]);
         return 2;
     }
 
@@ -1556,6 +1641,9 @@ int main(int argc, char **argv) {
         g_tarball_n = load_tarballs(argv[2], tarballs, 64);
         g_tarballs = tarballs;
     }
+    /* Optional. Absent just means "Forget saved" is never offered,
+     * which is correct when nothing is saved. */
+    if (argc > 3) load_saved_cmdlines(argv[3]);
 
     /* Booted from the initramfs we are in a footrace with driver probe:
      * init reaches this point within ~0.85s of the kernel starting
@@ -1850,6 +1938,7 @@ int main(int argc, char **argv) {
     shell_quote(stdout, "SELECTED_INITRD", entries[g_selected].initrd_path);
     shell_quote(stdout, "SELECTED_CMDLINE", entries[g_selected].cmdline);
     if (g_set_default) shell_quote(stdout, "SET_DEFAULT", "1");
+    if (g_setcl_set) shell_quote(stdout, "SET_CMDLINE", g_setcl);
     shell_quote(stdout, "SELECTED_BY", g_selected_by_timeout ? "timeout" : "user");
     fprintf(stderr, "picker: selection made by %s\n",
             g_selected_by_timeout ? "TIMEOUT (nothing was tapped)" : "user tap");

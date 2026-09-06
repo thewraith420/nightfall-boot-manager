@@ -206,7 +206,28 @@ fi
 # still present - see apply-default.sh. A missing/stale marker just
 # passes the list through unchanged.
 DEFAULT_MARKER=/mnt/root/boot/picker-default
-/bin/apply-default.sh /run/picker/menu.tsv.raw "$DEFAULT_MARKER" > /run/picker/menu.tsv
+CMDLINE_FILE=/mnt/root/boot/picker-cmdline
+
+# menu.tsv.raw -> menu.tsv. Shared by the initial build and by
+# refresh_menu after an install, so the two cannot drift apart.
+build_menu_files() {
+    /bin/apply-default.sh /run/picker/menu.tsv.raw "$DEFAULT_MARKER" > /run/picker/menu.tsv.def
+
+    # Then each kernel's saved command line, if it has one. picker reads
+    # the result straight out of the cmdline field, so what the Edit
+    # screen shows is exactly what will be booted - one source of truth.
+    # Best-effort: on failure the menu is simply what apply-default
+    # produced, which is always bootable.
+    if /bin/apply-cmdline.sh /run/picker/menu.tsv.def "$CMDLINE_FILE" > /run/picker/menu.tsv.cl \
+       && [ -s /run/picker/menu.tsv.cl ]; then
+        cat /run/picker/menu.tsv.cl > /run/picker/menu.tsv
+    else
+        stage "saved command lines not applied (continuing without them)"
+        cat /run/picker/menu.tsv.def > /run/picker/menu.tsv
+    fi
+}
+
+build_menu_files
 
 # Fallback target if the picker itself fails for any reason (no touch
 # device, no DRM output, crash, ...).
@@ -254,7 +275,7 @@ export PICKER_ROTATE
 refresh_menu() {
     if /bin/discover-kernels.sh /mnt/root/boot/grub/grub.cfg > /run/picker/menu.tsv.raw \
        && [ -s /run/picker/menu.tsv.raw ]; then
-        /bin/apply-default.sh /run/picker/menu.tsv.raw "$DEFAULT_MARKER" > /run/picker/menu.tsv
+        build_menu_files
         default_line=$(head -n1 /run/picker/menu.tsv)
         default_linux=$(printf '%s' "$default_line" | cut -f2)
         default_initrd=$(printf '%s' "$default_line" | cut -f3)
@@ -272,13 +293,14 @@ refresh_menu() {
 install_rounds=0
 while :; do
 stage "running picker"
-if /bin/picker /run/picker/menu.tsv /run/picker/tarballs.tsv > /run/picker/selected 2>/run/picker/picker.stderr; then
+if /bin/picker /run/picker/menu.tsv /run/picker/tarballs.tsv "$CMDLINE_FILE" > /run/picker/selected 2>/run/picker/picker.stderr; then
     picker_rc=0
     # Sets SELECTED_LINUX/INITRD/CMDLINE and SELECTED_BY, or SET_DEFAULT=1
     # if "Set Default" was used, or INSTALL_TARBALL if the user chose to
     # install instead of boot. Exactly one of the last two.
     INSTALL_TARBALL=
     RELOAD=
+    SET_CMDLINE=
     . /run/picker/selected
 
     # picker ran the install itself and showed its progress, so there is
@@ -379,6 +401,37 @@ fi
 # best-effort: a failure here should never block booting into what the
 # user actually just chose, so every step just logs and moves on
 # rather than treating persistence as required.
+# picker asks for a saved command line the same way it asks for a
+# default: it never touches the mount itself. SET_CMDLINE is
+# "<kernel>\t<cmdline>", or "<kernel>\t" alone to forget that kernel's
+# override and go back to whatever grub.cfg says.
+if [ -n "${SET_CMDLINE:-}" ]; then
+    if mount -o remount,rw /mnt/root 2>/dev/null; then
+        _ck=$(printf '%s' "$SET_CMDLINE" | cut -f1)
+        _cv=$(printf '%s' "$SET_CMDLINE" | cut -f2)
+        # Drop any existing line for this kernel, then re-add it if the
+        # new value is non-empty. awk rather than sed: the key is a path
+        # full of slashes.
+        if [ -f "$CMDLINE_FILE" ]; then
+            awk -F'\t' -v k="$_ck" '$1 != k' "$CMDLINE_FILE" > /run/picker/cl.new 2>/dev/null || : > /run/picker/cl.new
+        else
+            : > /run/picker/cl.new
+        fi
+        [ -n "$_cv" ] && printf '%s\t%s\n' "$_ck" "$_cv" >> /run/picker/cl.new
+        if cat /run/picker/cl.new > "$CMDLINE_FILE" 2>/dev/null; then
+            if [ -n "$_cv" ]; then stage "saved command line for $_ck"
+            else stage "cleared the saved command line for $_ck"; fi
+        else
+            echo "picker: failed to save the command line (continuing anyway)" >&2
+        fi
+        sync 2>/dev/null || true
+        mount -o remount,ro /mnt/root 2>/dev/null || \
+            echo "picker: failed to remount root read-only after saving the command line" >&2
+    else
+        echo "picker: could not remount rw to save the command line (continuing anyway)" >&2
+    fi
+fi
+
 if [ "${SET_DEFAULT:-}" = "1" ]; then
     if mount -o remount,rw /mnt/root; then
         if ! printf '%s\n' "$SELECTED_LINUX" > "$DEFAULT_MARKER" 2>/dev/null; then
