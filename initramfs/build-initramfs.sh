@@ -28,7 +28,7 @@ trap 'rm -rf "$staging"' EXIT
 # applet symlinks into the one busybox binary, so they cost no space.
 APPLETS="sh mount umount mkdir echo printf cut head awk cat ls
          sleep dmesg uname tail sync date wc grep
-         tar chroot tee rm blkid df"
+         tar chroot tee rm df"
 
 say() { echo "==> $*"; }
 die() { echo "build-initramfs: $*" >&2; exit 1; }
