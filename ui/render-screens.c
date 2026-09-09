@@ -79,6 +79,16 @@ int main(int argc, char **argv) {
     };
     g_tarballs = tb; g_tarball_n = 2;
 
+    static struct target tg[1] = {
+        { "/dev/sda1", "exfat", "Ventoy", "931G", "742G" },
+    };
+    static struct backup bk[2] = {
+        { "/dev/sda1", "picker-backup-20260909-1140", "Tue Sep  9 11:40:02 2026", "84G" },
+        { "/dev/sda1", "picker-backup-20260901-2210", "Tue Sep  1 22:10:44 2026", "81G" },
+    };
+    g_targets = tg; g_target_n = 1;
+    g_backups = bk; g_backup_n = 2;
+
     lv_obj_t *countdown_label = NULL;
     build_ui(entries, n, 30, &countdown_label);
     /* The countdown label only gets its text on the first timer tick,
@@ -102,6 +112,14 @@ int main(int argc, char **argv) {
     show_remove_list();
     lv_refr_now(disp);
     screenshot("remove-list");
+
+    show_backup_menu();
+    lv_refr_now(disp);
+    screenshot("backup-menu");
+
+    show_restore_list();
+    lv_refr_now(disp);
+    screenshot("restore-list");
 
     /* The removal confirmation - the destructive one. */
     remove_click_cb_render();

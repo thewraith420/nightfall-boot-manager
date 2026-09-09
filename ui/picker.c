@@ -109,6 +109,24 @@ struct tarball {
     char size[32];
 };
 
+/* An external drive the picker could back up to, and a backup already
+ * on one. Both found by shell (discover-backup-targets.sh,
+ * discover-backups.sh) so picker never mounts anything itself. */
+struct target {
+    char dev[128];
+    char fstype[32];
+    char label[64];
+    char size[16];
+    char freespace[16];
+};
+
+struct backup {
+    char target[128];
+    char name[128];
+    char when[64];
+    char size[16];
+};
+
 /* ---------------- menu.tsv ---------------- */
 
 static int load_entries(const char *path, struct entry *entries, int max) {
@@ -160,6 +178,58 @@ static int load_tarballs(const char *path, struct tarball *tb, int max) {
         snprintf(tb[n].path, sizeof(tb[n].path), "%s", f[0]);
         snprintf(tb[n].version, sizeof(tb[n].version), "%s", f[1] ? f[1] : f[0]);
         snprintf(tb[n].size, sizeof(tb[n].size), "%s", f[2] ? f[2] : "?");
+        n++;
+    }
+    fclose(fp);
+    return n;
+}
+
+/* Both files are "one record per line, tab separated"; this fills n
+ * fixed-size fields from one line and ignores anything extra. */
+static int split_tsv(char *line, char *out[], int n) {
+    char *p = line;
+    int i = 0;
+    for (; i < n && p; i++) {
+        out[i] = p;
+        char *tab = strchr(p, '\t');
+        if (tab) { *tab = '\0'; p = tab + 1; } else { p = NULL; }
+    }
+    return i;
+}
+
+static int load_targets(const char *path, struct target *t, int max) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+    char line[600];
+    int n = 0;
+    while (n < max && fgets(line, sizeof(line), fp)) {
+        line[strcspn(line, "\n")] = '\0';
+        char *f[5] = {0};
+        if (split_tsv(line, f, 5) < 1 || !f[0] || !*f[0]) continue;
+        snprintf(t[n].dev, sizeof(t[n].dev), "%.127s", f[0]);
+        snprintf(t[n].fstype, sizeof(t[n].fstype), "%.31s", f[1] ? f[1] : "?");
+        snprintf(t[n].label, sizeof(t[n].label), "%.63s", f[2] ? f[2] : "");
+        snprintf(t[n].size, sizeof(t[n].size), "%.15s", f[3] ? f[3] : "?");
+        snprintf(t[n].freespace, sizeof(t[n].freespace), "%.15s", f[4] ? f[4] : "?");
+        n++;
+    }
+    fclose(fp);
+    return n;
+}
+
+static int load_backups(const char *path, struct backup *b, int max) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+    char line[600];
+    int n = 0;
+    while (n < max && fgets(line, sizeof(line), fp)) {
+        line[strcspn(line, "\n")] = '\0';
+        char *f[4] = {0};
+        if (split_tsv(line, f, 4) < 2 || !f[0] || !*f[0] || !f[1] || !*f[1]) continue;
+        snprintf(b[n].target, sizeof(b[n].target), "%.127s", f[0]);
+        snprintf(b[n].name, sizeof(b[n].name), "%.127s", f[1]);
+        snprintf(b[n].when, sizeof(b[n].when), "%.63s", f[2] ? f[2] : "unknown");
+        snprintf(b[n].size, sizeof(b[n].size), "%.15s", f[3] ? f[3] : "?");
         n++;
     }
     fclose(fp);
@@ -1217,7 +1287,7 @@ static void install_finished(int ok) {
 
 /* 0: child started, the UI takes over. -1: caller should fall back to
  * exiting and letting init do the work. */
-static int start_child(const char *script, const char *arg,
+static int start_child(const char *script, const char *arg, const char *arg2,
                        const char *heading, const char *subject,
                        const char *warning) {
     if (access(script, X_OK) != 0) return -1;
@@ -1233,7 +1303,10 @@ static int start_child(const char *script, const char *arg,
         dup2(pfd[1], STDERR_FILENO);
         close(pfd[1]);
         const char *root = getenv("PICKER_ROOT");
-        execl(script, script, root ? root : "/mnt/root", arg, (char *)NULL);
+        if (arg2)
+            execl(script, script, root ? root : "/mnt/root", arg, arg2, (char *)NULL);
+        else
+            execl(script, script, root ? root : "/mnt/root", arg, (char *)NULL);
         _exit(127);
     }
     close(pfd[1]);
@@ -1247,7 +1320,7 @@ static int start_install(int idx) {
     g_child_what = "Install";
     g_child_ok_msg  = "Installed. It will appear in the kernel list.";
     g_child_bad_msg = "Failed - nothing was removed, existing kernels still boot.";
-    return start_child(install_script(), g_tarballs[idx].path,
+    return start_child(install_script(), g_tarballs[idx].path, NULL,
                        LV_SYMBOL_DOWNLOAD "  Installing",
                        g_tarballs[idx].version,
                        "This takes several minutes. Do not power off.");
@@ -1260,7 +1333,7 @@ static int start_remove(int idx) {
      * are already gone. Claiming otherwise sent me looking in the wrong
      * place on the first real failure. */
     g_child_bad_msg = "Failed - see the output above before rebooting.";
-    return start_child(remove_script(), g_kernels[idx].release,
+    return start_child(remove_script(), g_kernels[idx].release, NULL,
                        LV_SYMBOL_TRASH "  Removing",
                        g_kernels[idx].release,
                        "Deleting the kernel, its modules and its menu entries.");
@@ -1284,6 +1357,116 @@ static void remove_confirm_cb(lv_event_t *e) {
         lv_obj_set_height(b, DIALOG_BTN_H);
         lv_obj_add_event_cb(b, cancel_cb, LV_EVENT_CLICKED, m);
     }
+}
+
+static struct target *g_targets;
+static int g_target_n;
+static struct backup *g_backups;
+static int g_backup_n;
+
+static const char *backup_script(void) {
+    const char *s = getenv("PICKER_BACKUP_SH");
+    return s ? s : "/bin/backup-system.sh";
+}
+static const char *restore_script(void) {
+    const char *s = getenv("PICKER_RESTORE_SH");
+    return s ? s : "/bin/restore-system.sh";
+}
+
+static int start_backup(int idx) {
+    g_child_what = "Backup";
+    g_child_ok_msg  = "Backed up. The archive is on the drive.";
+    g_child_bad_msg = "Failed - see the output above. Nothing on this machine changed.";
+    return start_child(backup_script(), g_targets[idx].dev, NULL,
+                       LV_SYMBOL_SAVE "  Backing up",
+                       g_targets[idx].label[0] ? g_targets[idx].label : g_targets[idx].dev,
+                       "Reads the whole system. Minutes, not seconds. Do not unplug the drive.");
+}
+
+static int start_restore(int idx) {
+    g_child_what = "Restore";
+    g_child_ok_msg  = "Restored. Reboot when you are ready.";
+    g_child_bad_msg = "Failed - see the output above before rebooting.";
+    return start_child(restore_script(), g_backups[idx].target, g_backups[idx].name,
+                       LV_SYMBOL_UPLOAD "  Restoring",
+                       g_backups[idx].name,
+                       "Writes over the running system. Do not power off.");
+}
+
+/* A plain two-button confirm. The install and remove dialogs predate it
+ * and carry extra wording of their own; these two are simple enough to
+ * share one. */
+static lv_obj_t *simple_confirm(int idx, const char *title, const char *body,
+                                const char *go_label, lv_event_cb_t go_cb,
+                                int destructive) {
+    lv_obj_t *mbox = lv_msgbox_create(NULL);
+    lv_obj_set_width(mbox, lv_pct(72));
+    lv_obj_set_user_data(mbox, (void *)(intptr_t)idx);
+    lv_msgbox_add_title(mbox, title);
+    lv_msgbox_add_text(mbox, body);
+
+    lv_obj_t *no = lv_msgbox_add_footer_button(mbox, "Cancel");
+    lv_obj_t *go = lv_msgbox_add_footer_button(mbox, go_label);
+    lv_obj_t *footer = lv_msgbox_get_footer(mbox);
+    lv_obj_set_height(footer, LV_SIZE_CONTENT);
+    lv_obj_set_height(lv_msgbox_get_header(mbox), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_column(footer, DIALOG_BTN_GAP, 0);
+    lv_obj_set_style_pad_row(footer, DIALOG_BTN_GAP, 0);
+    lv_obj_set_width(no, lv_pct(100));
+    lv_obj_set_width(go, lv_pct(100));
+    lv_obj_set_height(no, DIALOG_BTN_H);
+    lv_obj_set_height(go, DIALOG_BTN_H);
+    /* Same convention as the rest: the action sits at the bottom, and a
+     * destructive one looks dangerous rather than default. */
+    lv_obj_set_style_bg_color(go, lv_color_hex(destructive ? 0xc0392b : 0x3d7ee8), 0);
+    lv_obj_set_style_bg_opa(go, destructive ? LV_OPA_40 : LV_OPA_30, 0);
+    lv_obj_add_event_cb(no, cancel_cb, LV_EVENT_CLICKED, mbox);
+    lv_obj_add_event_cb(go, go_cb, LV_EVENT_CLICKED, mbox);
+    return mbox;
+}
+
+static void backup_confirm_cb(lv_event_t *e) {
+    lv_obj_t *mbox = lv_event_get_user_data(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(mbox);
+    lv_msgbox_close_async(mbox);
+    start_backup(idx);
+}
+
+static void restore_confirm_cb(lv_event_t *e) {
+    lv_obj_t *mbox = lv_event_get_user_data(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(mbox);
+    lv_msgbox_close_async(mbox);
+    start_restore(idx);
+}
+
+static void backup_click_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    char body[500];
+    snprintf(body, sizeof(body),
+             "%.60s  (%.20s, %.20s free)\n\n"
+             "Copies the whole system to this drive as one archive.\n\n"
+             "The system is read-only while this runs, so nothing is "
+             "changing underneath it - that is why this is worth doing "
+             "from here rather than from a running desktop.",
+             g_targets[idx].label[0] ? g_targets[idx].label : g_targets[idx].dev,
+             g_targets[idx].fstype, g_targets[idx].freespace);
+    simple_confirm(idx, "Back up to this drive?", body, "Back up", backup_confirm_cb, 0);
+    screenshot_soon("backup-dialog");
+}
+
+static void restore_click_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    char body[600];
+    snprintf(body, sizeof(body),
+             "%.60s\n%.60s  (%.16s)\n\n"
+             "Writes this backup over the current system. Files created "
+             "since the backup are NOT removed - this puts the system "
+             "back, it does not rewind it.\n\n"
+             "The picker itself is never overwritten.",
+             g_backups[idx].name, g_backups[idx].when, g_backups[idx].size);
+    simple_confirm(idx, "Restore this backup?", body, "Restore", restore_confirm_cb, 1);
+    screenshot_soon("restore-dialog");
 }
 
 static void remove_click_cb(lv_event_t *e) {
@@ -1389,6 +1572,9 @@ static void show_main_menu(void);
 static void show_kernel_list(void);
 static void show_install_list(void);
 static void show_remove_list(void);
+static void show_backup_menu(void);
+static void show_backup_targets(void);
+static void show_restore_list(void);
 
 static lv_obj_t *make_row_h(const char *icon, const char *text, int dimmed, int h) {
     lv_obj_t *btn = lv_button_create(g_list);
@@ -1441,6 +1627,76 @@ static void show_main_menu(void) {
     snprintf(buf, sizeof(buf), "Remove a kernel   (%d installed)", g_kernel_n);
     b = make_row_h(LV_SYMBOL_TRASH, buf, g_kernel_n <= 1, MENU_ROW_H);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_remove_list);
+
+    if (g_backup_n > 0)
+        snprintf(buf, sizeof(buf), "Back up / Restore   (%d backup%s)",
+                 g_backup_n, g_backup_n == 1 ? "" : "s");
+    else
+        snprintf(buf, sizeof(buf), "Back up / Restore   (%d drive%s)",
+                 g_target_n, g_target_n == 1 ? "" : "s");
+    b = make_row_h(LV_SYMBOL_SAVE, buf, g_target_n == 0 && g_backup_n == 0, MENU_ROW_H);
+    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_backup_menu);
+}
+
+static void show_backup_menu(void) {
+    lv_obj_clean(g_list);
+    lv_label_set_text(g_header, LV_SYMBOL_SAVE "  Back up / Restore");
+    add_back_row(show_main_menu);
+
+    char buf[96];
+    snprintf(buf, sizeof(buf), "Back up now   (%d drive%s found)",
+             g_target_n, g_target_n == 1 ? "" : "s");
+    lv_obj_t *b = make_row(LV_SYMBOL_SAVE, buf, g_target_n == 0);
+    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_backup_targets);
+
+    snprintf(buf, sizeof(buf), "Restore a backup   (%d available)", g_backup_n);
+    b = make_row(LV_SYMBOL_UPLOAD, buf, g_backup_n == 0);
+    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_restore_list);
+
+    if (g_target_n == 0) {
+        lv_obj_t *l = lv_label_create(g_list);
+        lv_label_set_text(l, "No external drive found.\n\n"
+                             "Plug one in and reboot the picker - it looks\n"
+                             "for drives once, at startup.");
+        lv_obj_set_style_text_color(l, lv_color_hex(0x93a0aa), 0);
+    }
+}
+
+static void show_backup_targets(void) {
+    lv_obj_clean(g_list);
+    lv_label_set_text(g_header, LV_SYMBOL_SAVE "  Back up to which drive?");
+    add_back_row(show_backup_menu);
+
+    for (int i = 0; i < g_target_n; i++) {
+        char row[220];
+        snprintf(row, sizeof(row), "%.40s  %.10s  %.10s free",
+                 g_targets[i].label[0] ? g_targets[i].label : g_targets[i].dev,
+                 g_targets[i].fstype, g_targets[i].freespace);
+        lv_obj_t *b = make_row(LV_SYMBOL_DRIVE, row, 0);
+        lv_obj_add_event_cb(b, backup_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+}
+
+static void show_restore_list(void) {
+    lv_obj_clean(g_list);
+    lv_label_set_text(g_header, LV_SYMBOL_UPLOAD "  Restore a backup");
+    add_back_row(show_backup_menu);
+
+    if (g_backup_n == 0) {
+        lv_obj_t *l = lv_label_create(g_list);
+        lv_label_set_text(l, "No backups found on the attached drives.\n\n"
+                             "Only completed backups are listed - one that\n"
+                             "stopped part way is not offered.");
+        lv_obj_set_style_text_color(l, lv_color_hex(0x93a0aa), 0);
+        return;
+    }
+    for (int i = 0; i < g_backup_n; i++) {
+        char row[240];
+        snprintf(row, sizeof(row), "%.40s   %.30s   %.10s",
+                 g_backups[i].name, g_backups[i].when, g_backups[i].size);
+        lv_obj_t *b = make_row(LV_SYMBOL_UPLOAD, row, 0);
+        lv_obj_add_event_cb(b, restore_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
 }
 
 static void show_remove_list(void) {
@@ -1618,7 +1874,7 @@ static int wait_for_device(const char *what, struct drm_dev *drm, struct touch_d
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <menu.tsv> [tarballs.tsv] [saved-cmdline.tsv]\n", argv[0]);
+        fprintf(stderr, "usage: %s <menu.tsv> [tarballs.tsv] [saved-cmdline.tsv] [targets.tsv] [backups.tsv]\n", argv[0]);
         return 2;
     }
 
@@ -1644,6 +1900,10 @@ int main(int argc, char **argv) {
     /* Optional. Absent just means "Forget saved" is never offered,
      * which is correct when nothing is saved. */
     if (argc > 3) load_saved_cmdlines(argv[3]);
+    static struct target targets[16];
+    static struct backup backups[64];
+    if (argc > 4) { g_target_n = load_targets(argv[4], targets, 16); g_targets = targets; }
+    if (argc > 5) { g_backup_n = load_backups(argv[5], backups, 64); g_backups = backups; }
 
     /* Booted from the initramfs we are in a footrace with driver probe:
      * init reaches this point within ~0.85s of the kernel starting

@@ -109,6 +109,54 @@ int main(void) {
     ck(find_recovery_for(1) == -1, "a recovery entry does not pair with itself");
     ck(count_bootable_rows() == 3, "recovery entries are not counted as menu rows");
 
+    /* --- backup targets and existing backups --- */
+    {
+        FILE *tf = fopen("/tmp/mock-targets", "w");
+        fprintf(tf, "/dev/sda1\texfat\tVentoy\t931G\t742G\n");
+        fprintf(tf, "/dev/sda2\tvfat\tVTOYEFI\t32M\t30M\n");
+        fprintf(tf, "\n");                       /* blank line, must be skipped */
+        fclose(tf);
+        static struct target tg[8];
+        int tn = load_targets("/tmp/mock-targets", tg, 8);
+        ck(tn == 2, "parses the Ventoy layout, skipping blank lines");
+        ck(!strcmp(tg[0].label, "Ventoy") && !strcmp(tg[0].fstype, "exfat"),
+           "label and filesystem survive the round trip");
+        ck(!strcmp(tg[0].freespace, "742G"), "free space is carried through for the dialog");
+
+        FILE *bf = fopen("/tmp/mock-backups", "w");
+        fprintf(bf, "/dev/sda1\tpicker-backup-20260909-1200\tTue Sep 9 12:00\t84G\n");
+        fprintf(bf, "/dev/sda1\tonly-a-name\n");   /* short row: still usable */
+        fprintf(bf, "\tno-target\n");             /* no target: unusable, skip */
+        fclose(bf);
+        static struct backup bk[8];
+        int bn = load_backups("/tmp/mock-backups", bk, 8);
+        ck(bn == 2, "a row without a target device is skipped, a short one is not");
+        ck(!strcmp(bk[0].target, "/dev/sda1"), "restore knows which drive to mount");
+        ck(!strcmp(bk[0].name, "picker-backup-20260909-1200"), "and which archive to use");
+        ck(!strcmp(bk[1].when, "unknown"), "a missing date degrades rather than breaking");
+
+        /* The launchers must pass the drive and the archive separately -
+         * restore-system.sh takes <root> <target> <name>. */
+        g_targets = tg; g_target_n = tn; g_backups = bk; g_backup_n = bn;
+        setenv("PICKER_BACKUP_SH", "/nonexistent", 1);
+        setenv("PICKER_RESTORE_SH", "/nonexistent", 1);
+        ck(start_backup(0) == -1, "backup falls back cleanly when its script is missing");
+        ck(start_restore(0) == -1, "restore falls back cleanly when its script is missing");
+
+        FILE *mf = fopen("/tmp/mock-restore.sh", "w");
+        fprintf(mf, "#!/bin/sh\necho \"restore: root=$1 target=$2 name=$3\"\nexit 0\n");
+        fclose(mf); chmod("/tmp/mock-restore.sh", 0755);
+        setenv("PICKER_RESTORE_SH", "/tmp/mock-restore.sh", 1);
+        g_prog_n = 0;
+        ck(start_restore(0) == 0, "starts the restore child");
+        ck(drain() == 1, "reports success");
+        ck(strstr(g_prog_lines[0], "target=/dev/sda1") != NULL, "passes the drive as argument 2");
+        ck(strstr(g_prog_lines[0], "name=picker-backup-20260909-1200") != NULL,
+           "passes the archive name as argument 3");
+        remove("/tmp/mock-restore.sh"); remove("/tmp/mock-targets"); remove("/tmp/mock-backups");
+        g_targets = NULL; g_target_n = 0; g_backups = NULL; g_backup_n = 0;
+    }
+
     /* --- saved per-kernel command lines --- */
     {
         FILE *sf = fopen("/tmp/mock-saved-cmdline", "w");

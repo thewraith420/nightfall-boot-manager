@@ -49,9 +49,9 @@ GRUB  →  picker kernel  →  init (PID 1)  →  mount real root (ro)
       →  kexec into the chosen kernel
 ```
 
-The menu opens on three choices: **Boot a kernel**, which lists everything
+The menu opens on four choices: **Boot a kernel**, which lists everything
 found in `grub.cfg`; **Install a kernel**, which lists kernel tarballs found
-on the real system; and **Remove a kernel**.
+on the real system; **Remove a kernel**; and **Back up / Restore**.
 
 Tapping a kernel opens a confirm dialog with **Boot**, **Cancel**, **Edit**,
 **Set Default** (persist this kernel as the first entry for future boots), and
@@ -92,12 +92,12 @@ device: it is the reason a broken touchscreen cannot strand you.
 
 <img src="docs/screenshots/01-menu.png" width="24%"> <img src="docs/screenshots/02-kernel-list.png" width="24%"> <img src="docs/screenshots/03-install-list.png" width="24%"> <img src="docs/screenshots/04-remove-list.png" width="24%">
 
-<img src="docs/screenshots/05-remove-dialog.png" width="24%"> <img src="docs/screenshots/06-install-progress.png" width="24%"> <img src="docs/screenshots/07-confirm-dialog.png" width="24%"> <img src="docs/screenshots/08-edit-dialog.png" width="24%">
+<img src="docs/screenshots/05-backup-menu.png" width="24%"> <img src="docs/screenshots/06-restore-list.png" width="24%"> <img src="docs/screenshots/09-confirm-dialog.png" width="24%"> <img src="docs/screenshots/10-edit-dialog.png" width="24%">
 
-*Top: the main menu, the installed-kernel list (checkmarks mark the saved
-default), tarballs available to install, and kernels available to remove.
-Bottom: the removal confirmation, an install in progress, the boot confirm
-dialog, and Edit's on-screen keyboard.*
+*Top: the main menu, installed kernels (checkmarks mark the saved default),
+tarballs available to install, and kernels available to remove. Bottom: the
+backup menu, existing backups on the drive, the boot confirm dialog, and
+Edit's on-screen keyboard.*
 
 These are real renders of the current code, not mockups:
 `ui/render-screens.c` includes `picker.c` and calls the same `build_ui()` /
@@ -131,6 +131,25 @@ X" and a recovery entry), and deletes the kernel, its initramfs, its modules
 and all of its menu entries together. It will not remove the last remaining
 kernel, the running kernel, or anything whose files aren't actually there,
 and it clears the saved default if that's what it just deleted.
+
+**Backing up** copies the whole system to an external drive as one tar
+archive, using the target system's own GNU tar under chroot. The reason to do
+it from here rather than from a running desktop: **the source is not in use** —
+the root stays mounted read-only for the whole backup, so nothing is being
+written while it is read. A running system cannot say that about itself.
+Space is checked before anything is written.
+
+**Restoring** extracts over the existing system and never wipes the
+partition. That covers what people actually restore for — a bad update, a
+broken config — while a wipe that failed part way would leave no kernels, no
+`grub.cfg` and no picker, on a tablet with no keyboard to drive GRUB's rescue
+prompt. TWRP can wipe because it lives in its own recovery partition; the
+picker lives on the one it would be wiping. The honest cost: files created
+since the backup are not removed — this puts the system back, it does not
+rewind it. For a true rewind, boot a live image from the same drive; the
+archive is an ordinary tar that any Linux can extract. The picker never
+restores over itself, so a backup taken before it existed cannot remove the
+thing performing the restore.
 
 ## Building and installing
 
