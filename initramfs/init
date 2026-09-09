@@ -269,22 +269,16 @@ export PICKER_ROTATE
 /bin/discover-tarballs.sh /mnt/root > /run/picker/tarballs.tsv 2>/dev/null || \
     : > /run/picker/tarballs.tsv
 
-# External drives we could back up to. Empty until the picker kernel has
-# the USB storage stack (SCSI/BLK_DEV_SD/USB_STORAGE), and empty is a
-# perfectly good answer - the Backup menu simply says none were found.
-/bin/discover-backup-targets.sh "$REAL_ROOT_DEV" > /run/picker/targets.tsv 2>/dev/null || \
-    : > /run/picker/targets.tsv
-
-# Backups already on those drives, "<target>\t<name>\t<date>\t<size>".
-# Enumerated here rather than by picker so the UI never has to mount
-# anything itself - same split as everywhere else: shell finds, picker
-# draws.
-: > /run/picker/backups.tsv
-cut -f1 /run/picker/targets.tsv 2>/dev/null | while read -r _t; do
-    [ -n "$_t" ] || continue
-    /bin/discover-backups.sh /mnt/root "$_t" 2>/dev/null \
-        | awk -v t="$_t" 'NF{print t "\t" $0}' >> /run/picker/backups.tsv || :
-done
+# External drives, and the backups already on them. The same script
+# picker re-runs when the user taps Rescan: the drive usually CANNOT be
+# present at boot, because with no keyboard there is no way to stop the
+# firmware booting a bootable USB stick instead of the picker. So this
+# is the first look, not the only one.
+/bin/scan-drives.sh "$REAL_ROOT_DEV" /mnt/root \
+    /run/picker/targets.tsv /run/picker/backups.tsv 2>/dev/null || {
+        : > /run/picker/targets.tsv
+        : > /run/picker/backups.tsv
+    }
 
 # grub.cfg changes when a kernel is installed, so the menu has to be
 # rebuilt from it - otherwise the list still omits what was just added,

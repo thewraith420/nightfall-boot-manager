@@ -1364,6 +1364,63 @@ static int g_target_n;
 static struct backup *g_backups;
 static int g_backup_n;
 
+/* Re-runs drive discovery while the picker is running.
+ *
+ * This is not a convenience. The Ventoy drive cannot be plugged in at
+ * boot: with no keyboard there is no way to tell the firmware to skip a
+ * bootable USB stick, so the machine boots Ventoy instead of the picker.
+ * The drive has to arrive afterwards, which makes a scan done once at
+ * startup useless for the only workflow available.
+ *
+ * Synchronous on purpose. It takes about a second - it mounts each
+ * candidate read-only to identify it - and a progress screen for that
+ * would be more machinery than the wait deserves. The label is changed
+ * and the screen forced to repaint first, so the UI does not simply
+ * freeze with no explanation. */
+static const char *scan_script(void) {
+    const char *s = getenv("PICKER_SCAN_SH");
+    return s ? s : "/bin/scan-drives.sh";
+}
+
+static char g_targets_path[256];
+static char g_backups_path[256];
+
+static int rescan_drives(void) {
+    const char *script = scan_script();
+    if (access(script, X_OK) != 0) return -1;
+    if (!g_targets_path[0] || !g_backups_path[0]) return -1;
+
+    const char *rootdev = getenv("REAL_ROOT_DEV");
+    const char *rootmnt = getenv("PICKER_ROOT");
+
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        /* The scan's own chatter would land on picker's stderr and end
+         * up in the boot log for no reason; it reports through the
+         * files it writes. */
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); }
+        execl(script, script,
+              rootdev ? rootdev : "/dev/mmcblk0p2",
+              rootmnt ? rootmnt : "/mnt/root",
+              g_targets_path, g_backups_path, (char *)NULL);
+        _exit(127);
+    }
+    int st = 0;
+    waitpid(pid, &st, 0);
+    if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) return -1;
+
+    /* Reload both lists from what the scan just wrote. */
+    static struct target targets[16];
+    static struct backup backups[64];
+    g_target_n = load_targets(g_targets_path, targets, 16);
+    g_targets = g_target_n ? targets : NULL;
+    g_backup_n = load_backups(g_backups_path, backups, 64);
+    g_backups = g_backup_n ? backups : NULL;
+    return 0;
+}
+
 static const char *backup_script(void) {
     const char *s = getenv("PICKER_BACKUP_SH");
     return s ? s : "/bin/backup-system.sh";
@@ -1574,6 +1631,7 @@ static void show_install_list(void);
 static void show_remove_list(void);
 static void show_backup_menu(void);
 static void show_backup_targets(void);
+static void rescan_cb(lv_event_t *e);
 static void show_restore_list(void);
 
 static lv_obj_t *make_row_h(const char *icon, const char *text, int dimmed, int h) {
@@ -1638,10 +1696,29 @@ static void show_main_menu(void) {
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_backup_menu);
 }
 
+static void rescan_cb(lv_event_t *e) {
+    lv_obj_t *btn = lv_event_get_target(e);
+    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+    /* Say what is happening and get it on screen BEFORE blocking - this
+     * display is driven manually, so without the forced repaint the UI
+     * would simply sit still for a second with the old label showing. */
+    if (lbl) lv_label_set_text(lbl, LV_SYMBOL_REFRESH "  Scanning...");
+    lv_refr_now(NULL);
+
+    rescan_drives();
+    show_backup_menu();
+}
+
 static void show_backup_menu(void) {
     lv_obj_clean(g_list);
     lv_label_set_text(g_header, LV_SYMBOL_SAVE "  Back up / Restore");
     add_back_row(show_main_menu);
+
+    /* First row, because with no keyboard the drive cannot be present
+     * at boot - this is the normal way to get here, not a recovery
+     * path. */
+    lv_obj_t *rs = make_row(LV_SYMBOL_REFRESH, "Rescan for drives", 0);
+    lv_obj_add_event_cb(rs, rescan_cb, LV_EVENT_CLICKED, NULL);
 
     char buf[96];
     snprintf(buf, sizeof(buf), "Back up now   (%d drive%s found)",
@@ -1656,8 +1733,10 @@ static void show_backup_menu(void) {
     if (g_target_n == 0) {
         lv_obj_t *l = lv_label_create(g_list);
         lv_label_set_text(l, "No external drive found.\n\n"
-                             "Plug one in and reboot the picker - it looks\n"
-                             "for drives once, at startup.");
+                             "Plug the drive in now, then tap Rescan.\n\n"
+                             "It cannot be plugged in before booting: with no\n"
+                             "keyboard attached the firmware would boot the\n"
+                             "USB stick instead of the picker.");
         lv_obj_set_style_text_color(l, lv_color_hex(0x93a0aa), 0);
     }
 }
@@ -1902,8 +1981,16 @@ int main(int argc, char **argv) {
     if (argc > 3) load_saved_cmdlines(argv[3]);
     static struct target targets[16];
     static struct backup backups[64];
-    if (argc > 4) { g_target_n = load_targets(argv[4], targets, 16); g_targets = targets; }
-    if (argc > 5) { g_backup_n = load_backups(argv[5], backups, 64); g_backups = backups; }
+    if (argc > 4) {
+        snprintf(g_targets_path, sizeof(g_targets_path), "%.255s", argv[4]);
+        g_target_n = load_targets(argv[4], targets, 16);
+        g_targets = g_target_n ? targets : NULL;
+    }
+    if (argc > 5) {
+        snprintf(g_backups_path, sizeof(g_backups_path), "%.255s", argv[5]);
+        g_backup_n = load_backups(argv[5], backups, 64);
+        g_backups = g_backup_n ? backups : NULL;
+    }
 
     /* Booted from the initramfs we are in a footrace with driver probe:
      * init reaches this point within ~0.85s of the kernel starting

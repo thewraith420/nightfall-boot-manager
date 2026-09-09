@@ -157,6 +157,48 @@ int main(void) {
         g_targets = NULL; g_target_n = 0; g_backups = NULL; g_backup_n = 0;
     }
 
+    /* --- rescan: the drive cannot be present at boot --- */
+    {
+        /* With no keyboard, plugging the Ventoy stick in before reboot
+         * makes the firmware boot Ventoy instead of the picker. So the
+         * drive arrives while the picker is already running, and a scan
+         * done once at startup would never see it. */
+        setenv("PICKER_SCAN_SH", "/nonexistent/scan-drives.sh", 1);
+        ck(rescan_drives() == -1, "rescan fails cleanly when the scan script is missing");
+
+        FILE *sf = fopen("/tmp/mock-scan.sh", "w");
+        fprintf(sf,
+            "#!/bin/sh\n"
+            "printf '/dev/sdb1\\texfat\\t\\t931G\\t742G\\n' > \"$3\"\n"
+            "printf '/dev/sdb1\\tafter-hotplug\\tnow\\t84G\\n' > \"$4\"\n"
+            "exit 0\n");
+        fclose(sf); chmod("/tmp/mock-scan.sh", 0755);
+        setenv("PICKER_SCAN_SH", "/tmp/mock-scan.sh", 1);
+
+        snprintf(g_targets_path, sizeof(g_targets_path), "/tmp/mock-t.tsv");
+        snprintf(g_backups_path, sizeof(g_backups_path), "/tmp/mock-b.tsv");
+        g_target_n = 0; g_targets = NULL;
+        g_backup_n = 0; g_backups = NULL;
+
+        ck(rescan_drives() == 0, "rescan runs the scan script");
+        ck(g_target_n == 1, "a drive plugged in AFTER boot is now found");
+        ck(!strcmp(g_targets[0].dev, "/dev/sdb1"), "with the right device");
+        ck(g_backup_n == 1 && !strcmp(g_backups[0].name, "after-hotplug"),
+           "and the backups on it are picked up too");
+
+        /* Unplugged again: the lists must empty, not keep stale entries
+         * pointing at a device that is gone. */
+        sf = fopen("/tmp/mock-scan.sh", "w");
+        fprintf(sf, "#!/bin/sh\n: > \"$3\"\n: > \"$4\"\nexit 0\n");
+        fclose(sf); chmod("/tmp/mock-scan.sh", 0755);
+        ck(rescan_drives() == 0, "rescan runs again");
+        ck(g_target_n == 0 && g_targets == NULL, "an unplugged drive disappears from the list");
+        ck(g_backup_n == 0 && g_backups == NULL, "and so do its backups");
+
+        remove("/tmp/mock-scan.sh"); remove("/tmp/mock-t.tsv"); remove("/tmp/mock-b.tsv");
+        g_targets_path[0] = '\0'; g_backups_path[0] = '\0';
+    }
+
     /* --- saved per-kernel command lines --- */
     {
         FILE *sf = fopen("/tmp/mock-saved-cmdline", "w");
