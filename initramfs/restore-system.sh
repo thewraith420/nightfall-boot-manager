@@ -83,8 +83,16 @@ chroot "$root" /usr/sbin/grub-probe --target=device / >/dev/null 2>&1 || \
 # ---------------------------------------------------------- extract
 # --exclude paths are relative to the archive root, which was made with
 # "tar -cf ... /" so members look like /boot/picker/...
+# Absolute path: a bare "tar" resolves to busybox's applet under
+# Ubuntu's standalone busybox, not the chroot's GNU tar. Same note as
+# backup-system.sh - it cost a real backup attempt there.
+if   [ -x "$root/usr/bin/tar" ]; then TAR=/usr/bin/tar
+elif [ -x "$root/bin/tar" ];     then TAR=/bin/tar
+else die "no tar inside the target system - cannot restore with its own tools"
+fi
+
 say "extracting (this takes a while - do not power off)"
-chroot "$root" tar \
+chroot "$root" "$TAR" \
     --checkpoint=50000 --checkpoint-action=echo \
     --totals \
     --exclude=/boot/picker --exclude=/boot/grub/custom.cfg \

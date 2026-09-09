@@ -71,8 +71,18 @@ say "preparing chroot"
 mount -t proc  none "$root/proc" 2>/dev/null || die "could not mount /proc in the chroot"
 mount -t sysfs none "$root/sys"  2>/dev/null || true
 
-[ -x "$root/bin/tar" ] || [ -x "$root/usr/bin/tar" ] || \
-    die "no tar inside the target system - cannot make a backup with its own tools"
+# ABSOLUTE PATH, and it matters more than it looks. Ubuntu builds
+# busybox with FEATURE_SH_STANDALONE, so a bare "tar" resolves from
+# busybox's OWN applet table before the chroot's filesystem is ever
+# consulted. That silently ran busybox tar inside the chroot, which has
+# no --checkpoint or --totals, so it printed its usage and exited -
+# costing a real backup attempt. Every other chroot call here already
+# used an absolute path; these two were the exception.
+if   [ -x "$root/usr/bin/tar" ]; then TAR=/usr/bin/tar
+elif [ -x "$root/bin/tar" ];     then TAR=/bin/tar
+else die "no tar inside the target system - cannot make a backup with its own tools"
+fi
+say "using $TAR from the target system"
 
 archive=/mnt/$BACKUP_DIR/$name.tar
 
@@ -80,7 +90,7 @@ archive=/mnt/$BACKUP_DIR/$name.tar
 # Everything else is faithful, including /home and /var - a restore
 # should put the machine back, not approximately back.
 say "writing $archive (this takes a while - the source stays read-only)"
-chroot "$root" tar \
+chroot "$root" "$TAR" \
     --checkpoint=50000 --checkpoint-action=echo \
     --totals \
     --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run \

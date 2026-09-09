@@ -64,6 +64,13 @@ rc=$(run)
 out | grep -q "MARKER_TAR.*--exclude=/mnt" && ok "excludes the target mount (no self-swallowing)" || bad "missing /mnt exclusion"
 out | grep -q "MARKER_TAR.*--exclude=/proc" && ok "excludes pseudo-filesystems" || bad "missing /proc exclusion"
 out | grep -qE "MARKER_TAR.*(-cf|--checkpoint)" && ok "creates the archive with progress reporting" || bad "no checkpoint/create flags"
+# Ubuntu's busybox is FEATURE_SH_STANDALONE, so a bare "tar" is resolved
+# from busybox's applet table instead of the chroot's GNU tar - which
+# printed usage and killed a real backup attempt. The path must be
+# absolute.
+out | grep -qE "MARKER_TAR [^ ]+ /usr/bin/tar" \
+  && ok "runs the target's GNU tar by absolute path, not busybox's applet" \
+  || bad "bare or wrong tar path: $(out | grep -oE "MARKER_TAR [^ ]+ [^ ]+" | head -1)"
 [ -f "$SB/root/mnt/nocturne-backups/testbk.info" ] && ok "writes an .info sidecar" || bad "no sidecar"
 grep -q -- "- 1.2.3" "$SB/root/mnt/nocturne-backups/testbk.info" 2>/dev/null \
   && ok "sidecar records which kernels were in the backup" || bad "sidecar missing kernel list"

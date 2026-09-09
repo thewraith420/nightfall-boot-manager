@@ -18,6 +18,7 @@ setup() {
   : > "$SB/root/mnt/nocturne-backups/bk.tar"
   [ "$1" = yes ] && echo "created: whenever" > "$SB/root/mnt/nocturne-backups/bk.info"
   : > "$SB/target"
+  mkdir -p "$SB/root/usr/bin"; : > "$SB/root/usr/bin/tar"; chmod +x "$SB/root/usr/bin/tar"
   printf '#!/bin/sh\nexit 0\n' > "$SB/bin/mount"
   printf '#!/bin/sh\nexit 0\n' > "$SB/bin/umount"
   printf '#!/bin/sh\nexit 0\n' > "$SB/bin/sync"
@@ -64,6 +65,9 @@ out | grep -q "MARKER_EXTRACT.*--exclude=/boot/picker" \
 out | grep -q "MARKER_EXTRACT.*--exclude=/boot/grub/custom.cfg" \
   && ok "keeps the picker's GRUB entry (an old backup would not have it)" || bad "would drop the picker's menu entry"
 out | grep -q "MARKER_EXTRACT.*-xpf" && ok "extracts preserving permissions" || bad "no -p"
+out | grep -qE "MARKER_EXTRACT [^ ]+ /usr/bin/tar" \
+  && ok "runs the target's GNU tar by absolute path, not busybox's applet" \
+  || bad "bare or wrong tar path: $(out | grep -oE "MARKER_EXTRACT [^ ]+ [^ ]+" | head -1)"
 out | grep -q "MARKER_UPDATE_GRUB" \
   && ok "regenerates the menu so it matches what is actually on disk" || bad "left a stale grub.cfg"
 
