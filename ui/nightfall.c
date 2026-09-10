@@ -1340,7 +1340,7 @@ static void install_finished(int ok) {
 }
 
 /* Consumes whatever the running child has written, dispatching complete
- * lines to the progress screen. buf/*len carry the tail of a partial
+ * lines to the progress screen. `buf` and `*len` carry the tail of a partial
  * line between calls - the child writes whenever it likes, so a read
  * landing mid-line is normal and printing fragments would be wrong.
  *
