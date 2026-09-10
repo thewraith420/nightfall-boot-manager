@@ -154,17 +154,17 @@ fi
 # crashkernel belong to the real OS, not to an initramfs that mounts its
 # own root and wants its diagnostics visible.
 if [ -n "${NIGHTFALL_CMDLINE+x}" ]; then
-    picker_cmdline=$NIGHTFALL_CMDLINE
+    nightfall_cmdline=$NIGHTFALL_CMDLINE
     say "using NIGHTFALL_CMDLINE from the environment"
 else
-    picker_cmdline=$(tr ' ' '\n' < /proc/cmdline | grep '^i915\.' | tr '\n' ' ' | sed 's/ *$//')
+    nightfall_cmdline=$(tr ' ' '\n' < /proc/cmdline | grep '^i915\.' | tr '\n' ' ' | sed 's/ *$//')
 fi
 
-if [ -n "$picker_cmdline" ]; then
-    say "picker kernel cmdline: $picker_cmdline"
+if [ -n "$nightfall_cmdline" ]; then
+    say "Nightfall kernel cmdline: $nightfall_cmdline"
 else
     echo "install-nightfall: note: no i915.* options found in /proc/cmdline, so the" >&2
-    echo "  picker entry gets a bare kernel line. If the picker boots to a black" >&2
+    echo "  Nightfall entry gets a bare kernel line. If Nightfall boots to a black" >&2
     echo "  screen but the boot log shows it ran fine, this is the first suspect:" >&2
     echo "  set NIGHTFALL_CMDLINE='...' and re-run." >&2
 fi
@@ -184,7 +184,7 @@ menuentry 'Nightfall (touch)' --id nightfall {
         insmod part_gpt
         insmod ext2
         search --no-floppy --fs-uuid --set=root $boot_uuid
-        linux   $kpath $picker_cmdline
+        linux   $kpath $nightfall_cmdline
         initrd  $ipath
 }
 $END_MARK
