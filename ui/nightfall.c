@@ -1823,7 +1823,7 @@ static void add_back_row(void (*target)(void)) {
 
 static void show_main_menu(void) {
     lv_obj_clean(g_list);
-    lv_label_set_text(g_header, LV_SYMBOL_POWER "  Nightfall");
+    lv_label_set_text(g_header, LV_SYMBOL_POWER "  Nightfall Boot Manager");
 
     char buf[96];
     snprintf(buf, sizeof(buf), "Boot a kernel   (%d installed)", count_bootable_rows());
