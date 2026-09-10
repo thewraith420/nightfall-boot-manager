@@ -15,21 +15,21 @@ on selection.
   of continuing with nothing to boot; if `picker` itself fails or
   produces no usable selection (no touch device, no DRM output, a
   crash), falls back to the first discovered kernel instead - same
-  "first entry is the default" convention `PICKER_TIMEOUT_SECS` uses in
-  `ui/picker.c`. This matters because `kexec-boot.sh` is `exec`'d in
+  "first entry is the default" convention `NIGHTFALL_TIMEOUT_SECS` uses in
+  `ui/nightfall.c`. This matters because `kexec-boot.sh` is `exec`'d in
   place of PID 1: its own `set -eu`/`${2:?}` correctly refuses to run
   with a missing kernel path, but that clean refusal becomes "Attempted
   to kill init!" instead of anything recoverable if nothing upstream
   caught the failure first. Found by code review (not hardware-
   dependent - pure shell control flow) and verified against the real
   file with mocked dependencies covering both the happy path and every
-  failure branch. Also sets `PICKER_ROTATE=270` (overridable), since
-  `ui/picker.c` defaults to `0` and 270 is upright on the Slate's panel
+  failure branch. Also sets `NIGHTFALL_ROTATE=270` (overridable), since
+  `ui/nightfall.c` defaults to `0` and 270 is upright on the Slate's panel
   - without it the menu renders sideways. That stayed hidden for a long
   time because rotation drives the display *and* touch transforms
   together, so an unset value is merely sideways rather than
-  unresponsive, and because every hardware test so far ran `./picker` by
-  hand from a VT with `PICKER_ROTATE` already exported in the shell -
+  unresponsive, and because every hardware test so far ran `./nightfall` by
+  hand from a VT with `NIGHTFALL_ROTATE` already exported in the shell -
   never through `init`, the one path that didn't set it.
 - `test-init.sh` - runs the **real** `init` (absolute paths rewritten
   into a sandbox, so it can't drift from a copy) against mocked
@@ -74,14 +74,14 @@ on selection.
   that actually matters - the kernel's own `uninstall.sh` checks nothing
   beyond being root and will happily leave you with none), nor the
   running kernel, nor a release whose `vmlinuz` isn't there, nor
-  anything path-shaped. It also clears `/boot/picker-default` when that
+  anything path-shaped. It also clears `/boot/nightfall-default` when that
   pointed at the kernel just removed - `apply-default.sh` tolerates a
   stale marker, but it would silently stop working with no clue why.
   `test-remove-kernel.sh` covers all of that against a fake root, and
   most of its 18 assertions are cases where the right answer is "refuse
   and change nothing".
 - `apply-cmdline.sh` - applies each kernel's saved command line from
-  `/boot/picker-cmdline` (`<vmlinuz path>\t<cmdline>`), replacing the
+  `/boot/nightfall-cmdline` (`<vmlinuz path>\t<cmdline>`), replacing the
   cmdline field for that kernel's rows. A whole-line override rather
   than a merge, because that is what Edit hands back: the user saw the
   complete command line and edited it, so what they saved *is* the
@@ -106,10 +106,10 @@ on selection.
   previously "Set Default"-marked entry (see `ui/README.md`) is moved
   to the front, if it's still present; a missing or stale marker just
   passes the list through unchanged. This is the only place that needs
-  to know about a persisted preference - `ui/picker.c`'s auto-boot
+  to know about a persisted preference - `ui/nightfall.c`'s auto-boot
   timeout and `init`'s picker-failure fallback both already just take
   "the first entry". Also appends a 5th `is_default` field ("1" or
-  empty) to every line, so `ui/picker.c` can show a checkmark on the
+  empty) to every line, so `ui/nightfall.c` can show a checkmark on the
   current default directly in the menu, not just act on it silently at
   boot time. Verified with a synthetic menu.tsv covering all four
   cases: no marker, marker matches one entry, marker matches multiple
@@ -136,12 +136,12 @@ on selection.
   discover-kernels.sh/picker/kexec-boot.sh.
 
 - `build-initramfs.sh` - assembles everything above plus busybox,
-  `kexec`, `ui/picker` and the libraries they're linked against into a
+  `kexec`, `ui/nightfall` and the libraries they're linked against into a
   gzipped cpio image (~2MB compressed, ~4MB unpacked). **Run it on the
   Slate**, or somewhere with a matching userland: it bundles the local
   libc, so a mismatch means a picker that won't start on the target.
   Everything it needs is checked up front and named individually -
-  a missing `kexec` or unbuilt `ui/picker` fails the build with an
+  a missing `kexec` or unbuilt `ui/nightfall` fails the build with an
   apt/make line to fix it, rather than producing an image that panics
   at boot with no console to explain why. Device nodes are created
   under `fakeroot`, so no root is needed to build.
@@ -164,14 +164,14 @@ on selection.
 
 ## init races the drivers; a hand-run picker never does
 
-Every hardware test so far ran `ui/picker` by hand on a fully booted
+Every hardware test so far ran `ui/nightfall` by hand on a fully booted
 system, where the eMMC, i915 and the I2C-HID touch controller had
 finished probing minutes earlier. As PID 1 the situation is inverted:
 devtmpfs creates each node when its driver binds, and `init` reaches
 `picker` within milliseconds of the kernel handing over. `picker` does
 not degrade if hardware is missing - it returns non-zero when `/dev/dri`
-has no card (`ui/picker.c:748`) or no touch device is found
-(`ui/picker.c:754`) - and the fallback then boots the default silently.
+has no card (`ui/nightfall.c:748`) or no touch device is found
+(`ui/nightfall.c:754`) - and the fallback then boots the default silently.
 
 **A device that appears 200 ms late is indistinguishable from one that
 is missing entirely**, and both produce exactly the "nothing happened,
@@ -195,14 +195,14 @@ node); no shell approximation of that stays correct.
 
 So the split is by who owns the criteria:
 
-- **`picker` waits for DRM and touch** (`PICKER_WAIT_SECS`, default 20,
+- **`picker` waits for DRM and touch** (`NIGHTFALL_WAIT_SECS`, default 20,
   0 disables), by retrying the real `drm_open_first_connected()` and
   `touch_open()` every 100 ms. The retry re-runs the actual open, so
   "usable device" keeps exactly one definition however the criteria
   evolve. It reports `touch input device appeared after 1.400s` or
   `gave up waiting ... after 20s` - different facts needing different
   responses.
-- **`init` waits only for the root device** (`PICKER_WAIT_ROOT`,
+- **`init` waits only for the root device** (`NIGHTFALL_WAIT_ROOT`,
   default 15s), the one device whose criteria it owns: can I mount it.
   Never fatal - a timeout is logged and boot continues.
 
@@ -228,10 +228,10 @@ So a failure now leaves evidence in two places:
 
 - **On screen**, on the fallback path only: a banner naming the failure,
   the last 15 lines of picker's own stderr, and a
-  `PICKER_FALLBACK_PAUSE` (default 8s) hold so it can be read or
+  `NIGHTFALL_FALLBACK_PAUSE` (default 8s) hold so it can be read or
   photographed before the kexec wipes the display. This is the only
   channel that works on a machine with no network yet.
-- **`/boot/picker-last-boot.log`** on the real root, written on every
+- **`/boot/nightfall-last-boot.log`** on the real root, written on every
   boot: outcome, stage trail, picker's exit code and full stderr,
   `ls` of `/dev/dri` and `/dev/input` (if picker never drew anything,
   a missing DRM node explains it instantly and is unguessable from a
@@ -281,7 +281,7 @@ shell immediately.
   shell is only a real safety net if something can actually be typed
   into it
 - **actually booting it.** Nothing has yet run this image for real:
-  every test so far has run `ui/picker` by hand from a VT on the
+  every test so far has run `ui/nightfall` by hand from a VT on the
   already-running OS, so `init` has never been PID 1 and
   `kexec-boot.sh` has never actually kexec'd anything. The image builds
   and verifies clean, which is a different claim from "it boots."

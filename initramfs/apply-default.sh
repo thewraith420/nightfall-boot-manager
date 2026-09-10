@@ -1,10 +1,10 @@
 #!/bin/sh
 # Reorders a discover-kernels.sh menu.tsv so a previously-set default
-# entry (if it still exists) is moved to the front - ui/picker.c's
+# entry (if it still exists) is moved to the front - ui/nightfall.c's
 # auto-boot timeout and initramfs/init's picker-failure fallback both
 # just take "the first entry", so this is the only place that needs to
 # know about a persisted preference. Also appends a 5th
-# "is_default" field ("1" or empty) to every line, so ui/picker.c can
+# "is_default" field ("1" or empty) to every line, so ui/nightfall.c can
 # show which entry is the default directly on the menu, not just act
 # on it at boot time.
 #

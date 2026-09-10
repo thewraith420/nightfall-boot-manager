@@ -2,7 +2,7 @@
 
 Two things live here:
 
-1. **The GRUB entry** (`grub-picker-entry.cfg`) - the only GRUB-facing
+1. **The GRUB entry** (`grub-nightfall-entry.cfg`) - the only GRUB-facing
    piece of the whole project, no other changes to GRUB itself. Not made
    the default/only boot path until the picker has proven itself (Bob's
    call - see the file's own comments for the rollout plan): lands first
@@ -22,11 +22,11 @@ Two things live here:
    refusal would otherwise surface as a kernel panic instead of anything
    recoverable - see `initramfs/README.md`).
 
-3. **The installer** (`install-picker.sh`): puts the picker kernel and
+3. **The installer** (`install-nightfall.sh`): puts the picker kernel and
    initramfs in place and adds the menu entry, without changing how
    anything else boots. Three properties, each structural rather than a
    matter of being careful:
-   - Files go in **`/boot/picker/`**, a subdirectory. GRUB's `10_linux`
+   - Files go in **`/boot/nightfall/`**, a subdirectory. GRUB's `10_linux`
      globs `/boot/vmlinuz-*` and doesn't recurse, so the picker kernel
      can never be auto-detected into a menu entry on its own - not now,
      and not during some future `apt upgrade` that regenerates
@@ -49,5 +49,5 @@ Two things live here:
 
 `discover-kernels.sh` (which this depends on for what to offer) has since
 been verified against the Slate's actual `grub.cfg`, not just a synthetic
-test file - see `initramfs/README.md`. `kexec-boot.sh`/`grub-picker-entry.cfg`
+test file - see `initramfs/README.md`. `kexec-boot.sh`/`grub-nightfall-entry.cfg`
 themselves are still untested against real hardware.

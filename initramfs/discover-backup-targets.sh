@@ -25,7 +25,7 @@ case "$rootdisk" in
     *)             while [ "${rootdisk%[0-9]}" != "$rootdisk" ]; do rootdisk=${rootdisk%[0-9]}; done ;;
 esac
 
-probe_dir=/run/picker/probe
+probe_dir=/run/nightfall/probe
 mkdir -p "$probe_dir" 2>/dev/null || true
 
 for disk in /sys/block/*; do

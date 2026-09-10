@@ -28,7 +28,7 @@ real driver-tree symbol (`WLAN`/`CFG80211`/`MAC80211`) first, then `WIRELESS`
 sticks once nothing is re-selecting it.
 
 **Storage/filesystem stripping done** (BobZKernel commit `d4a354e`), unblocked
-by nocturne-boot-picker's decision on open question #3 (parse the real
+by nightfall-boot-manager's decision on open question #3 (parse the real
 grub.cfg live). Checked the real hardware to answer both the storage and
 filesystem questions at once:
 

@@ -1,6 +1,6 @@
 /* Renders the picker's real screens offscreen, for documentation.
  *
- * This is NOT a mockup and NOT a retouched photo: it includes picker.c
+ * This is NOT a mockup and NOT a retouched photo: it includes nightfall.c
  * and calls the same build_ui() / open_confirm_dialog() / edit_cb() the
  * device runs, through picker's own flush_cb and screenshot() paths.
  * The only substitution is the destination - a malloc'd buffer standing
@@ -14,7 +14,7 @@
  *   make render-screens && ./render-screens <menu.tsv> <outdir>
  */
 #define main picker_real_main
-#include "picker.c"
+#include "nightfall.c"
 #undef main
 
 #define PANEL_W 3000   /* physical panel; logical is the 270-rotated swap */

@@ -21,7 +21,7 @@
 # same drive - the backup is an ordinary tar and any Linux can extract
 # it.
 #
-# THE PICKER NEVER RESTORES OVER ITSELF. /boot/picker and the GRUB
+# THE PICKER NEVER RESTORES OVER ITSELF. /boot/nightfall and the GRUB
 # stanza in custom.cfg are excluded, so restoring a backup taken before
 # the picker existed cannot remove the thing performing the restore.
 set -eu
@@ -82,7 +82,7 @@ chroot "$root" /usr/sbin/grub-probe --target=device / >/dev/null 2>&1 || \
 
 # ---------------------------------------------------------- extract
 # --exclude paths are relative to the archive root, which was made with
-# "tar -cf ... /" so members look like /boot/picker/...
+# "tar -cf ... /" so members look like /boot/nightfall/...
 # Absolute path: a bare "tar" resolves to busybox's applet under
 # Ubuntu's standalone busybox, not the chroot's GNU tar. Same note as
 # backup-system.sh - it cost a real backup attempt there.
@@ -98,7 +98,7 @@ say "extracting (this takes a while - do not power off)"
 chroot "$root" "$TAR" \
     --checkpoint=50000 --checkpoint-action=echo \
     --totals \
-    --exclude=/boot/picker --exclude=/boot/grub/custom.cfg \
+    --exclude=/boot/nightfall --exclude=/boot/grub/custom.cfg \
     --exclude=/mnt --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run \
     -xpf "/mnt/$BACKUP_DIR/$name.tar" -C / \
     || die "extract failed - the system is now a mix of restored and original files; re-run the restore, or boot a live image from the same drive"

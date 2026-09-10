@@ -90,14 +90,14 @@ out | grep -q "refusing to delete anything" && ok "says it refused rather than h
 echo "=== the saved default pointing at the removed kernel ==="
 
 setup "keep-me remove-me"
-printf '%s\n' /boot/vmlinuz-remove-me > "$SB/root/boot/picker-default"
+printf '%s\n' /boot/vmlinuz-remove-me > "$SB/root/boot/nightfall-default"
 run remove-me >/dev/null
-[ -e "$SB/root/boot/picker-default" ] && bad "left a default pointing at a deleted kernel" || ok "cleared the stale saved default"
+[ -e "$SB/root/boot/nightfall-default" ] && bad "left a default pointing at a deleted kernel" || ok "cleared the stale saved default"
 
 setup "keep-me remove-me"
-printf '%s\n' /boot/vmlinuz-keep-me > "$SB/root/boot/picker-default"
+printf '%s\n' /boot/vmlinuz-keep-me > "$SB/root/boot/nightfall-default"
 run remove-me >/dev/null
-grep -qx /boot/vmlinuz-keep-me "$SB/root/boot/picker-default" 2>/dev/null \
+grep -qx /boot/vmlinuz-keep-me "$SB/root/boot/nightfall-default" 2>/dev/null \
   && ok "leaves an unrelated saved default alone" || bad "clobbered a default for a different kernel"
 
 echo

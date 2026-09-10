@@ -1,9 +1,9 @@
 /* Verifies the screenshot dump un-rotates correctly, using a synthetic
  * framebuffer - a transposed axis here would only surface as a garbled
- * image in the README. Includes picker.c so it tests the REAL static
+ * image in the README. Includes nightfall.c so it tests the REAL static
  * function rather than a copy of its logic. */
 #define main picker_real_main
-#include "picker.c"
+#include "nightfall.c"
 #undef main
 
 #define PW 3000   /* physical panel */

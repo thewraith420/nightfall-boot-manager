@@ -1,13 +1,20 @@
-# nocturne-boot-picker
+# Nightfall Boot Manager
 
-A touch-driven boot picker for the Google Pixel Slate (`nocturne`), TWRP-style —
+A touch-driven boot manager for the Google Pixel Slate (`nocturne`), TWRP-style —
 replacing GRUB's mouse/keyboard-only menu with something you can actually use
 on a tablet with no keyboard attached.
 
 **Status: working end-to-end on real hardware.** Tap a kernel, confirm, and it
 `kexec`s straight into it. Confirmed on the Slate: touch selection, screen
-rotation, editing a kernel command line with an on-screen keyboard, and
-persisting a default. It is currently the machine's default GRUB entry.
+rotation, editing and persisting per-kernel command lines, installing and
+removing kernels, and backing the whole system up to an external drive. It is
+the machine's default GRUB entry.
+
+> Renamed from `nocturne-boot-picker` on 2026-09-09. It started as a picker and
+> outgrew the word: it installs kernels, removes them, edits and remembers their
+> command lines, and backs up and restores the system. `install-nightfall.sh`
+> migrates an existing install in place — saved settings and the GRUB default
+> included.
 
 This is a deliberately separate project from
 [BobZKernel](https://github.com/thewraith420/BobZKernel), which builds the
@@ -61,7 +68,7 @@ Tapping a kernel opens a confirm dialog with **Boot**, **Cancel**, **Edit**,
 **Use once** or **Save for this kernel**. Saved lines are per kernel, so a
 debug kernel can carry extra logging while the one beside it stays clean, and
 **Forget saved** drops back to whatever `grub.cfg` says. They live in
-`/boot/picker-cmdline`, not in `grub.cfg`, so they survive `update-grub` and
+`/boot/nightfall-cmdline`, not in `grub.cfg`, so they survive `update-grub` and
 deleting the file reverts everything. Recovery entries are never overridden -
 several menu entries share one kernel image, and pushing a saved line onto the
 recovery entry would break the thing you reach for when a saved line turns out
@@ -84,7 +91,7 @@ running kernel having its modules replaced underneath it. It is additive, so
 every currently-bootable kernel stays bootable, and it returns you to the menu
 with the new kernel listed rather than booting straight into it.
 
-If nothing is tapped within `PICKER_TIMEOUT_SECS` (default 30) it boots the
+If nothing is tapped within `NIGHTFALL_TIMEOUT_SECS` (default 30) it boots the
 first entry, exactly like GRUB's own timeout. That matters on a keyboardless
 device: it is the reason a broken touchscreen cannot strand you.
 
@@ -99,7 +106,7 @@ the drive. Bottom: a backup in progress, kernels available to remove, the boot
 confirm dialog, and Edit's on-screen keyboard.*
 
 These are real renders of the current code, not mockups:
-`ui/render-screens.c` includes `picker.c` and calls the same `build_ui()` /
+`ui/render-screens.c` includes `nightfall.c` and calls the same `build_ui()` /
 `show_kernel_list()` / `open_confirm_dialog()` / Edit handler the device
 runs, through picker's own flush and screenshot paths, with a memory buffer
 standing in for the DRM scanout mapping. So they show exactly what the panel
@@ -119,7 +126,7 @@ These predate the menu restructure and the button-spacing fix, so the flat
 kernel list and edge-to-edge buttons are how it looked then.*
 
 `picker` can also capture itself on the device
-(`PICKER_SCREENSHOT_DIR=/path ./picker menu.tsv`), correctly un-rotated
+(`NIGHTFALL_SCREENSHOT_DIR=/path ./nightfall menu.tsv`), correctly un-rotated
 regardless of panel orientation — see [`ui/README.md`](ui/README.md#screenshots).
 
 **Removing** is the mirror image, and the only operation here that can make
@@ -160,17 +167,17 @@ bundles the local libc, so a mismatch produces a picker that won't start.
 cd BobZKernel && ./scripts/build-kernel-7.1.sh    # auto-selects config-7.1-picker
 
 # 2. the touch UI
-cd nocturne-boot-picker/ui && ./fetch-lvgl.sh && make
+cd nightfall-boot-manager/ui && ./fetch-lvgl.sh && make
 
 # 3. the initramfs (verifies itself at the end)
 cd ../initramfs && ./build-initramfs.sh
 
 # 4. install + add the GRUB entry
 cd ../boot-integration
-sudo ./install-picker.sh /path/to/vmlinuz-picker ../initramfs/picker-initramfs.img
+sudo ./install-nightfall.sh /path/to/vmlinuz-picker ../initramfs/nightfall-initramfs.img
 ```
 
-`install-picker.sh --uninstall` reverses it completely.
+`install-nightfall.sh --uninstall` reverses it completely.
 
 ### Why installation is deliberately paranoid
 
@@ -178,7 +185,7 @@ The failure mode is "this machine now boots into a stripped-down kernel by
 default", so three properties are structural rather than a matter of
 remembering to be careful:
 
-- Files go in **`/boot/picker/`**, a subdirectory. GRUB's `10_linux` globs
+- Files go in **`/boot/nightfall/`**, a subdirectory. GRUB's `10_linux` globs
   `/boot/vmlinuz-*` and does not recurse, so this kernel can never be
   auto-detected into a menu entry on its own — not now, and not during some
   future `apt` upgrade that regenerates `grub.cfg` unattended.
@@ -191,18 +198,18 @@ remembering to be careful:
 The kernel command line for the entry is derived from `/proc/cmdline` rather
 than hardcoded — the running system is by definition a working display
 configuration on this hardware, so whatever lights the panel now is carried
-across. Override with `PICKER_CMDLINE=...`.
+across. Override with `NIGHTFALL_CMDLINE=...`.
 
 ## Diagnostics
 
 The picker runs in a window with no journal, no scrollback, and no network. So
-every boot writes **`/boot/picker-last-boot.log`** to the real root: outcome,
+every boot writes **`/boot/nightfall-last-boot.log`** to the real root: outcome,
 stage trail, whether the selection came from a tap or the timeout, `picker`'s
 exit code and full stderr, `/dev/dri` and `/dev/input` listings,
 `/proc/bus/input/devices`, `/sys/bus/i2c/devices`, and the full `dmesg`.
 
 On the fallback path it also prints a banner on screen and holds for
-`PICKER_FALLBACK_PAUSE` seconds (default 8) so it can be read or photographed
+`NIGHTFALL_FALLBACK_PAUSE` seconds (default 8) so it can be read or photographed
 before the kexec wipes the display.
 
 This exists because a silent fallback is externally indistinguishable from
@@ -213,11 +220,11 @@ exactly that ambiguity.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `PICKER_ROTATE` | `270` (set by `init`) | Panel rotation: 0/90/180/270 |
-| `PICKER_TIMEOUT_SECS` | `30` | Auto-boot the first entry; `0` disables |
-| `PICKER_WAIT_SECS` | `20` | How long `picker` waits for DRM and touch |
-| `PICKER_WAIT_ROOT` | `15` | How long `init` waits for the root device |
-| `PICKER_FALLBACK_PAUSE` | `8` | On-screen hold before a fallback kexec |
+| `NIGHTFALL_ROTATE` | `270` (set by `init`) | Panel rotation: 0/90/180/270 |
+| `NIGHTFALL_TIMEOUT_SECS` | `30` | Auto-boot the first entry; `0` disables |
+| `NIGHTFALL_WAIT_SECS` | `20` | How long `picker` waits for DRM and touch |
+| `NIGHTFALL_WAIT_ROOT` | `15` | How long `init` waits for the root device |
+| `NIGHTFALL_FALLBACK_PAUSE` | `8` | On-screen hold before a fallback kexec |
 | `REAL_ROOT_DEV` | `/dev/mmcblk0p2` | Partition holding `/boot/grub/grub.cfg` |
 
 ## Testing
@@ -253,7 +260,7 @@ character devices.
 - **Graphics is `i915`** (Intel UHD 615). The panel needs
   `i915.enable_dpcd_backlight=2 i915.enable_psr=0` or it produces no visible
   output.
-- **Display is 3000x2000 at ~293 PPI**, mounted rotated — `PICKER_ROTATE=270`
+- **Display is 3000x2000 at ~293 PPI**, mounted rotated — `NIGHTFALL_ROTATE=270`
   is upright. Touch targets are sized in real-world units off that DPI
   (~1cm buttons), because the theme's own defaults come out around 1mm.
 - Root and `/boot` are the same ext4 partition, `/dev/mmcblk0p2` (eMMC).
@@ -290,7 +297,7 @@ Each of these cost a boot cycle or more to find.
 - **This display is driven manually, so nothing decides a repaint is due.**
   Content can be set, laid out and positioned correctly and still not appear
   until something calls `lv_obj_invalidate()`.
-- **LVGL is never told about rotation.** `PICKER_ROTATE` is handled by this
+- **LVGL is never told about rotation.** `NIGHTFALL_ROTATE` is handled by this
   code's own transform at exactly two points (flush callback and touch input);
   LVGL's own rotation support hands `flush_cb` a buffer still in unrotated
   space and hangs outright with `LV_DISPLAY_RENDER_MODE_FULL`.
@@ -298,12 +305,12 @@ Each of these cost a boot cycle or more to find.
 ## Directory layout
 
 ```
-nocturne-boot-picker/
+nightfall-boot-manager/
 ├── README.md              # this file
 ├── picker-kernel/         # how the BobZKernel picker-kernel branch plugs in
 ├── initramfs/             # init (PID 1), kernel discovery, build + verify + tests
-├── ui/                    # picker.c (LVGL touch menu), lv_conf.h, layout tests
-├── boot-integration/      # install-picker.sh, kexec glue, GRUB entry template
+├── ui/                    # nightfall.c (LVGL touch menu), lv_conf.h, layout tests
+├── boot-integration/      # install-nightfall.sh, kexec glue, GRUB entry template
 └── docs/                  # hardware findings, the real grub.cfg used as a fixture
 ```
 
@@ -334,7 +341,7 @@ The picker is now the default GRUB entry, with GRUB's own timeout left in
 place. If anything in the chain misbehaves, `init` falls back to booting the
 first discovered kernel rather than stranding you, and `picker`'s own timeout
 does the same if the display or touch fails. A long power-button press is the
-hard reset. `install-picker.sh --uninstall` removes the picker entirely and
+hard reset. `install-nightfall.sh --uninstall` removes the picker entirely and
 touches nothing else.
 
 Note that with no keyboard attached, GRUB's menu cannot be navigated off the

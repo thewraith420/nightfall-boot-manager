@@ -8,7 +8,8 @@ modules.order
 
 # LVGL (large, fetched via ui/fetch-lvgl.sh - not vendored, same convention as above)
 ui/lvgl/
-ui/picker
+ui/nightfall
+ui/picker            # stale pre-rename build; ignored so it cannot be re-added
 
 # Built initramfs images
 initramfs/*.img

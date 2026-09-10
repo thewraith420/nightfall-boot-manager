@@ -2,7 +2,7 @@
 # Unpacks a built initramfs and checks the things that otherwise only
 # show up as a kernel panic on a device with no console to explain it.
 #
-#   ./verify-initramfs.sh picker-initramfs.img
+#   ./verify-initramfs.sh nightfall-initramfs.img
 #
 # Checks, in rough order of how painful the failure would be:
 #   - /init exists, is executable, has a shebang pointing at a shell

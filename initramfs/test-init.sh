@@ -17,7 +17,7 @@ bad() { printf '  \033[31m[FAIL]\033[0m %s\n' "$*"; fail=$((fail+1)); }
 setup() {
   SB=$(mktemp -d); export SB
   devmode=${5:-present}
-  mkdir -p "$SB"/bin "$SB"/sbin "$SB"/run/picker "$SB"/mnt/root
+  mkdir -p "$SB"/bin "$SB"/sbin "$SB"/run/nightfall "$SB"/mnt/root
   # mnt/root/boot exists only if the root mount succeeds - that IS what
   # mounting the real root does. Pre-creating it unconditionally made
   # save_log's "is the root actually mounted?" guard untestable.
@@ -27,7 +27,7 @@ setup() {
   # delay, modelling a driver that binds just after init gets there.
   mkdir -p "$SB"/dev "$SB"/sys/class/drm/card0-eDP-1
   conn() { echo "$1" > "$SB/sys/class/drm/card0-eDP-1/status"; }
-  # picker owns waiting for DRM and touch (PICKER_WAIT_SECS, ui/picker.c)
+  # picker owns waiting for DRM and touch (NIGHTFALL_WAIT_SECS, ui/nightfall.c)
   # since only touch_open() knows what a usable device is. The ONLY wait
   # left in init is the root device, so that is what these exercise.
   case "$devmode" in
@@ -103,7 +103,7 @@ echo "MARKER_INSTALL_RAN \$2" >&2
 exit ${INSTALL_RC:-0}
 EOF
   case "$2" in
-    ok)    cat > "$SB/bin/picker" <<'EOF'
+    ok)    cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
 echo "picker mock: drew the menu" >&2
 echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
@@ -113,9 +113,9 @@ echo 'SELECTED_BY=timeout'
 exit 0
 EOF
     ;;
-    crash) printf '#!/bin/sh\necho "picker mock: MARKER_DRM_OPEN_FAILED /dev/dri/card0" >&2\nexit 3\n' > "$SB/bin/picker" ;;
-    empty) printf '#!/bin/sh\necho "picker mock: chose nothing" >&2\nexit 0\n' > "$SB/bin/picker" ;;
-    install) cat > "$SB/bin/picker" <<'EOF'
+    crash) printf '#!/bin/sh\necho "picker mock: MARKER_DRM_OPEN_FAILED /dev/dri/card0" >&2\nexit 3\n' > "$SB/bin/nightfall" ;;
+    empty) printf '#!/bin/sh\necho "picker mock: chose nothing" >&2\nexit 0\n' > "$SB/bin/nightfall" ;;
+    install) cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
 # First run asks for an install; later runs boot. Models the real flow,
 # where installing returns to the menu instead of booting.
@@ -132,7 +132,7 @@ fi
 exit 0
 EOF
     ;;
-    reload) cat > "$SB/bin/picker" <<'EOF'
+    reload) cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
 # picker ran the install itself and only wants the menu refreshed.
 n=$(cat /tmp/pickruns 2>/dev/null || echo 0); n=$((n+1)); echo $n > /tmp/pickruns
@@ -141,7 +141,7 @@ else echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'; echo 'SELECTED_INITRD=x'; echo 
 exit 0
 EOF
     ;;
-    installfail) cat > "$SB/bin/picker" <<'EOF'
+    installfail) cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
 n=$(cat /tmp/pickruns 2>/dev/null || echo 0); n=$((n+1)); echo $n > /tmp/pickruns
 if [ "$n" = 1 ]; then echo "INSTALL_TARBALL=/home/bob/k-installer.tar.gz"
@@ -188,7 +188,7 @@ EOF
     done
   fi
   sed -e "s|/bin/|$SB/bin/|g" -e "s|/sbin/|$SB/sbin/|g" \
-      -e "s|/mnt/root|$SB/mnt/root|g" -e "s|/run/picker|$SB/run/picker|g" \
+      -e "s|/mnt/root|$SB/mnt/root|g" -e "s|/run/nightfall|$SB/run/nightfall|g" \
       -e "s|/dev/dri|$SB/dev/dri|g" -e "s|/dev/input|$SB/dev/input|g" \
       -e "s|/sys/class/drm|$SB/sys/class/drm|g" \
       "$REPO/initramfs/init" > "$SB/init.body"
@@ -211,13 +211,13 @@ run() {
   if [ -z "${STRICT_BB:-}" ];  then _path="$_path:$PATH"; fi
 
   PATH="$_path" \
-  REAL_ROOT_DEV="$SB/dev/rootdev" PICKER_FALLBACK_PAUSE=0 \
-  PICKER_WAIT_ROOT=${W:-3} PICKER_WAIT_DRM=${W:-3} PICKER_WAIT_INPUT=${W:-3} \
-  PICKER_INSTALL_PAUSE=0 \
+  REAL_ROOT_DEV="$SB/dev/rootdev" NIGHTFALL_FALLBACK_PAUSE=0 \
+  NIGHTFALL_WAIT_ROOT=${W:-3} NIGHTFALL_WAIT_DRM=${W:-3} NIGHTFALL_WAIT_INPUT=${W:-3} \
+  NIGHTFALL_INSTALL_PAUSE=0 \
     ${TEST_SH:-/bin/sh} "$SB/init" >"$SB/out" 2>"$SB/err"
 }
 
-log()  { cat "$SB/mnt/root/boot/picker-last-boot.log" 2>/dev/null; }
+log()  { cat "$SB/mnt/root/boot/nightfall-last-boot.log" 2>/dev/null; }
 both() { cat "$SB/out" "$SB/err" 2>/dev/null; }
 
 echo "=== 1. happy path: picker returns a selection ==="
@@ -297,29 +297,29 @@ both | grep -q "MARKER_RESCUE" && bad "dropped to rescue over an optional featur
 
 echo "=== 11. SET_CMDLINE: save, then forget ==="
 setup clset ok 0 0
-cat > "$SB/bin/picker" <<'EOF'
+cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
 printf 'SELECTED_LINUX=/boot/vmlinuz-chosen\nSELECTED_INITRD=x\nSELECTED_CMDLINE=y\n'
 printf "SET_CMDLINE='/boot/vmlinuz-chosen\troot=x ro loglevel=7'\n"
 exit 0
 EOF
-chmod +x "$SB/bin/picker"; run
-grep -qx "/boot/vmlinuz-chosen	root=x ro loglevel=7" "$SB/mnt/root/boot/picker-cmdline" 2>/dev/null \
-  && ok "saves the kernel's command line" || bad "not saved: [$(cat "$SB/mnt/root/boot/picker-cmdline" 2>/dev/null)]"
+chmod +x "$SB/bin/nightfall"; run
+grep -qx "/boot/vmlinuz-chosen	root=x ro loglevel=7" "$SB/mnt/root/boot/nightfall-cmdline" 2>/dev/null \
+  && ok "saves the kernel's command line" || bad "not saved: [$(cat "$SB/mnt/root/boot/nightfall-cmdline" 2>/dev/null)]"
 log | grep -q "saved command line for" && ok "the boot log records it" || bad "not logged"
 
 setup clclr ok 0 0
-printf '/boot/vmlinuz-chosen\told\n/boot/vmlinuz-other\tkeep_me\n' > "$SB/mnt/root/boot/picker-cmdline"
-cat > "$SB/bin/picker" <<'EOF'
+printf '/boot/vmlinuz-chosen\told\n/boot/vmlinuz-other\tkeep_me\n' > "$SB/mnt/root/boot/nightfall-cmdline"
+cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
 printf 'SELECTED_LINUX=/boot/vmlinuz-chosen\nSELECTED_INITRD=x\nSELECTED_CMDLINE=y\n'
 printf "SET_CMDLINE='/boot/vmlinuz-chosen\t'\n"
 exit 0
 EOF
-chmod +x "$SB/bin/picker"; run
-grep -q "vmlinuz-chosen" "$SB/mnt/root/boot/picker-cmdline" 2>/dev/null \
+chmod +x "$SB/bin/nightfall"; run
+grep -q "vmlinuz-chosen" "$SB/mnt/root/boot/nightfall-cmdline" 2>/dev/null \
   && bad "forgetting left the old entry behind" || ok "an empty value forgets that kernel"
-grep -qx "/boot/vmlinuz-other	keep_me" "$SB/mnt/root/boot/picker-cmdline" 2>/dev/null \
+grep -qx "/boot/vmlinuz-other	keep_me" "$SB/mnt/root/boot/nightfall-cmdline" 2>/dev/null \
   && ok "another kernel's saved line is untouched" || bad "clobbered a different kernel"
 log | grep -q "cleared the saved command line" && ok "logged as a clear, not a save" || bad "wrong log line"
 

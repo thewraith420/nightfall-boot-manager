@@ -2,13 +2,13 @@
  * reaching the progress screen, the exit status, and the fallback when
  * the install script isn't runnable.
  *
- * Includes picker.c so these are the real functions - start_install()
+ * Includes nightfall.c so these are the real functions - start_install()
  * really forks, really execs, and the output really comes back down a
  * pipe. Only the script is a stand-in.
  */
 #include <sys/stat.h>
 #define main picker_real_main
-#include "picker.c"
+#include "nightfall.c"
 #undef main
 
 static int fails, passes;
@@ -53,7 +53,7 @@ int main(void) {
     build_ui(e, 1, 0, &cd);
 
     /* --- fallback when the script cannot run --- */
-    setenv("PICKER_INSTALL_SH", "/nonexistent/install-kernel.sh", 1);
+    setenv("NIGHTFALL_INSTALL_SH", "/nonexistent/install-kernel.sh", 1);
     ck(start_install(0) == -1, "falls back when the install script is missing (init does it instead)");
 
     /* --- a script that succeeds --- */
@@ -63,8 +63,8 @@ int main(void) {
                "echo 'install-kernel: update-initramfs -c -k 9.9.9-test'\n"
                "exit 0\n");
     fclose(f); chmod("/tmp/mock-install-ok.sh", 0755);
-    setenv("PICKER_INSTALL_SH", "/tmp/mock-install-ok.sh", 1);
-    setenv("PICKER_ROOT", "/mnt/root", 1);
+    setenv("NIGHTFALL_INSTALL_SH", "/tmp/mock-install-ok.sh", 1);
+    setenv("NIGHTFALL_ROOT", "/mnt/root", 1);
 
     ck(start_install(0) == 0, "starts the child when the script is runnable");
     ck(g_install_fd >= 0 && g_install_pid > 0, "has a live pipe and pid");
@@ -84,7 +84,7 @@ int main(void) {
     f = fopen("/tmp/mock-install-bad.sh", "w");
     fprintf(f, "#!/bin/sh\necho 'install-kernel: ERROR: update-initramfs failed'\nexit 1\n");
     fclose(f); chmod("/tmp/mock-install-bad.sh", 0755);
-    setenv("PICKER_INSTALL_SH", "/tmp/mock-install-bad.sh", 1);
+    setenv("NIGHTFALL_INSTALL_SH", "/tmp/mock-install-bad.sh", 1);
     g_prog_n = 0;
     ck(start_install(0) == 0, "starts a failing install too");
     ck(drain() == 0, "reports FAILURE for an exit-1 install (not silently ok)");
@@ -138,15 +138,15 @@ int main(void) {
         /* The launchers must pass the drive and the archive separately -
          * restore-system.sh takes <root> <target> <name>. */
         g_targets = tg; g_target_n = tn; g_backups = bk; g_backup_n = bn;
-        setenv("PICKER_BACKUP_SH", "/nonexistent", 1);
-        setenv("PICKER_RESTORE_SH", "/nonexistent", 1);
+        setenv("NIGHTFALL_BACKUP_SH", "/nonexistent", 1);
+        setenv("NIGHTFALL_RESTORE_SH", "/nonexistent", 1);
         ck(start_backup(0) == -1, "backup falls back cleanly when its script is missing");
         ck(start_restore(0) == -1, "restore falls back cleanly when its script is missing");
 
         FILE *mf = fopen("/tmp/mock-restore.sh", "w");
         fprintf(mf, "#!/bin/sh\necho \"restore: root=$1 target=$2 name=$3\"\nexit 0\n");
         fclose(mf); chmod("/tmp/mock-restore.sh", 0755);
-        setenv("PICKER_RESTORE_SH", "/tmp/mock-restore.sh", 1);
+        setenv("NIGHTFALL_RESTORE_SH", "/tmp/mock-restore.sh", 1);
         g_prog_n = 0;
         ck(start_restore(0) == 0, "starts the restore child");
         ck(drain() == 1, "reports success");
@@ -203,7 +203,7 @@ int main(void) {
          * makes the firmware boot Ventoy instead of the picker. So the
          * drive arrives while the picker is already running, and a scan
          * done once at startup would never see it. */
-        setenv("PICKER_SCAN_SH", "/nonexistent/scan-drives.sh", 1);
+        setenv("NIGHTFALL_SCAN_SH", "/nonexistent/scan-drives.sh", 1);
         ck(rescan_drives() == -1, "rescan fails cleanly when the scan script is missing");
 
         FILE *sf = fopen("/tmp/mock-scan.sh", "w");
@@ -213,7 +213,7 @@ int main(void) {
             "printf '/dev/sdb1\\tafter-hotplug\\tnow\\t84G\\n' > \"$4\"\n"
             "exit 0\n");
         fclose(sf); chmod("/tmp/mock-scan.sh", 0755);
-        setenv("PICKER_SCAN_SH", "/tmp/mock-scan.sh", 1);
+        setenv("NIGHTFALL_SCAN_SH", "/tmp/mock-scan.sh", 1);
 
         snprintf(g_targets_path, sizeof(g_targets_path), "/tmp/mock-t.tsv");
         snprintf(g_backups_path, sizeof(g_backups_path), "/tmp/mock-b.tsv");
@@ -330,14 +330,14 @@ int main(void) {
     f = fopen("/tmp/mock-remove.sh", "w");
     fprintf(f, "#!/bin/sh\necho \"remove-kernel: removing $2\"\nexit 0\n");
     fclose(f); chmod("/tmp/mock-remove.sh", 0755);
-    setenv("PICKER_REMOVE_SH", "/tmp/mock-remove.sh", 1);
+    setenv("NIGHTFALL_REMOVE_SH", "/tmp/mock-remove.sh", 1);
     g_prog_n = 0;
     ck(start_remove(0) == 0, "starts the removal child");
     ck(drain() == 1, "reports success");
     ck(strstr(g_prog_lines[0], "removing 7.1.12") != NULL,
        "passes the kernel RELEASE to the script, not a file path");
 
-    setenv("PICKER_REMOVE_SH", "/nonexistent/remove-kernel.sh", 1);
+    setenv("NIGHTFALL_REMOVE_SH", "/nonexistent/remove-kernel.sh", 1);
     ck(start_remove(0) == -1, "refuses to pretend when the remove script is missing");
 
     remove("/tmp/mock-remove.sh");

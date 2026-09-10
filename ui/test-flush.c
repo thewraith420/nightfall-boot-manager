@@ -9,7 +9,7 @@
  * reboot cycle to see - so the fast path should not ship on reasoning
  * alone. */
 #define main picker_real_main
-#include "picker.c"
+#include "nightfall.c"
 #undef main
 
 static void flush_reference(struct picker_ctx *ctx, const lv_area_t *area, uint8_t *px_map) {

@@ -18,7 +18,7 @@ see `../.gitignore`).
 
 ## What's in place
 
-`picker.c`:
+`nightfall.c`:
 - Opens the first connected DRM output via legacy KMS (dumb buffer,
   `drmModeSetCrtc`) exactly as the raw-DRM version did.
 - Finds an evdev touch device (`ABS_MT_POSITION_X`, `ABS_X` fallback),
@@ -69,7 +69,7 @@ in testing: the msgbox footer's inherited flex gap made two 50%-width
 buttons individually overflow their row, so all four stacked
 one-per-line instead of forming a 2x2 grid, until the gap was
 explicitly zeroed.
-- `PICKER_TIMEOUT_SECS` (default 10, `0` disables) auto-boots the first
+- `NIGHTFALL_TIMEOUT_SECS` (default 10, `0` disables) auto-boots the first
   entry if nothing's tapped, cancelled by the first touch - mirrors
   GRUB's own timeout-to-default behavior, the actual safety net for a
   keyboardless device with no other escape hatch.
@@ -84,7 +84,7 @@ is never called. Investigating LVGL's rotation support directly (see
 laid out in *logical* (unrotated) space, and separately hangs outright
 when combined with `LV_DISPLAY_RENDER_MODE_FULL`. Rather than depend on
 that plus a second, possibly differently-conventioned rotation
-implementation living inside LVGL, `PICKER_ROTATE=0|90|180|270` is
+implementation living inside LVGL, `NIGHTFALL_ROTATE=0|90|180|270` is
 handled entirely by this file's own `logical_to_physical`/
 `physical_to_logical` transform (carried over from the raw-DRM version,
 already verified bijective) at exactly two integration points: the
@@ -236,7 +236,7 @@ tap.
 ## Real-hardware results so far
 
 Confirmed on the Slate: DRM master + i915 modeset work through LVGL's
-render path; `PICKER_ROTATE=270` is the correct upright orientation;
+render path; `NIGHTFALL_ROTATE=270` is the correct upright orientation;
 the `VT_SETMODE` fix works (no repeat of the Ctrl+Alt+F1 hang); and
 **touch works** - tapping a row opens the confirm dialog naming that
 same entry (verified by Bob on-device after the `event2`/multitouch
@@ -266,7 +266,7 @@ test rounds without relying on phone photos:
 
 ```sh
 mkdir -p /tmp/shots
-sudo PICKER_ROTATE=270 PICKER_SCREENSHOT_DIR=/tmp/shots ./picker /tmp/menu.tsv
+sudo NIGHTFALL_ROTATE=270 NIGHTFALL_SCREENSHOT_DIR=/tmp/shots ./nightfall /tmp/menu.tsv
 ./ppm-to-png.sh /tmp/shots/*.ppm
 ```
 
@@ -293,7 +293,7 @@ PPM keeps the in-picker code to ~15 lines and needs no zlib in the initramfs;
 `ppm-to-png.sh` converts afterwards, using ImageMagick if present and
 otherwise python3's standard library (no pillow needed).
 
-Note these are written wherever `PICKER_SCREENSHOT_DIR` points, which must
+Note these are written wherever `NIGHTFALL_SCREENSHOT_DIR` points, which must
 already exist. Running `picker` by hand from a VT is the intended way to
 capture them — during a real boot the initramfs has no writable place to keep
 them, so wiring that up would mean copying them out during `init`'s existing

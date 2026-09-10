@@ -6,7 +6,7 @@
 #
 # Run this ON THE TARGET (the Slate), or on a machine with a matching
 # userland: the image bundles the local busybox, kexec, and the shared
-# libraries ui/picker is linked against, so a mismatched libc here
+# libraries ui/nightfall is linked against, so a mismatched libc here
 # means a picker that won't start there.
 #
 # Everything it needs is checked up front and reported by name - a
@@ -17,7 +17,7 @@ set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/.." && pwd)
-out=${1:-$here/picker-initramfs.img}
+out=${1:-$here/nightfall-initramfs.img}
 staging=$(mktemp -d)
 trap 'rm -rf "$staging"' EXIT
 
@@ -48,8 +48,8 @@ kexec_bin=$(command -v kexec || true)
 [ -n "$kexec_bin" ] || die "kexec not found - the picker's whole job is to kexec.
   Debian/Ubuntu: sudo apt install kexec-tools"
 
-picker_bin=$repo/ui/picker
-[ -x "$picker_bin" ] || die "$picker_bin not built.
+nightfall_bin=$repo/ui/nightfall
+[ -x "$nightfall_bin" ] || die "$nightfall_bin not built.
   cd $repo/ui && ./fetch-lvgl.sh && make"
 
 for f in "$here/init" "$here/discover-kernels.sh" "$here/apply-default.sh" \
@@ -69,7 +69,7 @@ done
 
 say "staging root at $staging"
 mkdir -p "$staging"/bin "$staging"/sbin "$staging"/proc "$staging"/sys \
-         "$staging"/dev/pts "$staging"/run/picker "$staging"/mnt/root \
+         "$staging"/dev/pts "$staging"/run/nightfall "$staging"/mnt/root \
          "$staging"/lib "$staging"/lib64 "$staging"/etc
 
 install -m 0755 "$(command -v busybox)" "$staging/bin/busybox"
@@ -81,7 +81,7 @@ ln -sf ../bin/busybox "$staging/sbin/mdev"
 
 install -m 0755 "$kexec_bin" "$staging/sbin/kexec"
 ln -sf ../sbin/kexec "$staging/bin/kexec"
-install -m 0755 "$picker_bin" "$staging/bin/picker"
+install -m 0755 "$nightfall_bin" "$staging/bin/nightfall"
 
 # init references these by absolute path - keep them in lockstep with
 # initramfs/init, which is the source of truth for where they live.
@@ -123,7 +123,7 @@ copy_libs_for() {
 }
 
 say "resolving shared libraries"
-for b in "$staging/bin/busybox" "$staging/sbin/kexec" "$staging/bin/picker"; do
+for b in "$staging/bin/busybox" "$staging/sbin/kexec" "$staging/bin/nightfall"; do
     echo "  $(basename "$b"):"
     copy_libs_for "$b"
 done

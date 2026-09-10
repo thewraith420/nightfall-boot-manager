@@ -15,7 +15,7 @@
  * separately hangs outright when combined with
  * LV_DISPLAY_RENDER_MODE_FULL. Rather than depend on that and a second,
  * possibly differently-conventioned rotation implementation inside
- * LVGL, PICKER_ROTATE is handled by this file's own logical_to_physical
+ * LVGL, NIGHTFALL_ROTATE is handled by this file's own logical_to_physical
  * / physical_to_logical transform (bijectivity verified with a
  * standalone test harness) at exactly two points: the flush callback
  * (logical LVGL render -> physical framebuffer) and touch input
@@ -23,7 +23,7 @@
  * display is created at the already-swapped *logical* resolution and
  * never told about rotation at all.
  *
- * Safety net: if nothing is tapped within PICKER_TIMEOUT_SECS (default
+ * Safety net: if nothing is tapped within NIGHTFALL_TIMEOUT_SECS (default
  * 10, 0 disables it), auto-boots the first entry - GRUB's own menu has
  * exactly this timeout-to-default behavior, and a keyboardless device
  * with no escape hatch otherwise has no recovery path if touch ever
@@ -241,7 +241,7 @@ static int load_backups(const char *path, struct backup *b, int max) {
 enum { ROT_0, ROT_90, ROT_180, ROT_270 };
 
 static int parse_rotation(void) {
-    const char *s = getenv("PICKER_ROTATE");
+    const char *s = getenv("NIGHTFALL_ROTATE");
     if (!s) return ROT_0;
     if (!strcmp(s, "90")) return ROT_90;
     if (!strcmp(s, "180")) return ROT_180;
@@ -691,7 +691,7 @@ static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
  * rather than the way the panel scans. A sideways screenshot needs
  * hand-rotating before it is any use in a README.
  *
- * Triggered by PICKER_SCREENSHOT_DIR rather than a signal: in the real
+ * Triggered by NIGHTFALL_SCREENSHOT_DIR rather than a signal: in the real
  * boot there is no shell in the initramfs to send one from, and
  * event-triggered dumps are repeatable across test rounds in a way that
  * "press the thing at the right moment" is not.
@@ -1196,12 +1196,12 @@ static void build_kernel_list(void) {
 }
 
 static const char *remove_script(void) {
-    const char *s = getenv("PICKER_REMOVE_SH");
+    const char *s = getenv("NIGHTFALL_REMOVE_SH");
     return s ? s : "/bin/remove-kernel.sh";
 }
 
 static const char *install_script(void) {
-    const char *s = getenv("PICKER_INSTALL_SH");
+    const char *s = getenv("NIGHTFALL_INSTALL_SH");
     return s ? s : "/bin/install-kernel.sh";
 }
 
@@ -1355,7 +1355,7 @@ static int start_child(const char *script, const char *arg, const char *arg2,
         dup2(pfd[1], STDOUT_FILENO);
         dup2(pfd[1], STDERR_FILENO);
         close(pfd[1]);
-        const char *root = getenv("PICKER_ROOT");
+        const char *root = getenv("NIGHTFALL_ROOT");
         if (arg2)
             execl(script, script, root ? root : "/mnt/root", arg, arg2, (char *)NULL);
         else
@@ -1431,7 +1431,7 @@ static int g_backup_n;
  * and the screen forced to repaint first, so the UI does not simply
  * freeze with no explanation. */
 static const char *scan_script(void) {
-    const char *s = getenv("PICKER_SCAN_SH");
+    const char *s = getenv("NIGHTFALL_SCAN_SH");
     return s ? s : "/bin/scan-drives.sh";
 }
 
@@ -1444,7 +1444,7 @@ static int rescan_drives(void) {
     if (!g_targets_path[0] || !g_backups_path[0]) return -1;
 
     const char *rootdev = getenv("REAL_ROOT_DEV");
-    const char *rootmnt = getenv("PICKER_ROOT");
+    const char *rootmnt = getenv("NIGHTFALL_ROOT");
 
     pid_t pid = fork();
     if (pid < 0) return -1;
@@ -1475,11 +1475,11 @@ static int rescan_drives(void) {
 }
 
 static const char *backup_script(void) {
-    const char *s = getenv("PICKER_BACKUP_SH");
+    const char *s = getenv("NIGHTFALL_BACKUP_SH");
     return s ? s : "/bin/backup-system.sh";
 }
 static const char *restore_script(void) {
-    const char *s = getenv("PICKER_RESTORE_SH");
+    const char *s = getenv("NIGHTFALL_RESTORE_SH");
     return s ? s : "/bin/restore-system.sh";
 }
 
@@ -1971,7 +1971,7 @@ static void shell_quote(FILE *out, const char *name, const char *value) {
     fputs("'\n", out);
 }
 
-/* Retries a device open until it succeeds or PICKER_WAIT_SECS (default
+/* Retries a device open until it succeeds or NIGHTFALL_WAIT_SECS (default
  * 20, 0 disables) elapses. Exactly one of drm/touch is non-NULL - the
  * point is that the retry re-runs the REAL open, so "usable device"
  * keeps exactly one definition no matter how the criteria evolve.
@@ -1981,7 +1981,7 @@ static void shell_quote(FILE *out, const char *name, const char *value) {
  * boot log is often the only account of a failure anyone gets. */
 #define WAIT_POLL_MS 100
 static int wait_for_device(const char *what, struct drm_dev *drm, struct touch_dev *touch) {
-    const char *s = getenv("PICKER_WAIT_SECS");
+    const char *s = getenv("NIGHTFALL_WAIT_SECS");
     int limit_ms = (s ? atoi(s) : 20) * 1000;
     if (limit_ms < 0) limit_ms = 0;
 
@@ -2011,7 +2011,7 @@ int main(int argc, char **argv) {
     }
 
     int timeout_secs = DEFAULT_TIMEOUT_SECS;
-    const char *timeout_env = getenv("PICKER_TIMEOUT_SECS");
+    const char *timeout_env = getenv("NIGHTFALL_TIMEOUT_SECS");
     if (timeout_env) timeout_secs = atoi(timeout_env);
 
     struct entry entries[MAX_ENTRIES];
@@ -2088,7 +2088,7 @@ int main(int argc, char **argv) {
     /* Directory must already exist - picker does not create it, so a
      * typo'd path fails loudly at the first dump rather than silently
      * scattering files somewhere unexpected. */
-    g_shot_dir = getenv("PICKER_SCREENSHOT_DIR");
+    g_shot_dir = getenv("NIGHTFALL_SCREENSHOT_DIR");
 
     lv_init();
     /* Route LVGL's own warnings to stderr - never stdout, which

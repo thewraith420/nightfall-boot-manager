@@ -10,7 +10,7 @@ mount -t devpts none /dev/pts
 
 mdev -s
 
-mkdir -p /run/picker /mnt/root
+mkdir -p /run/nightfall /mnt/root
 
 # kexec-boot.sh correctly refuses to run with a missing linux path
 # (set -eu, ${2:?}) - but since it's exec'd below in place of PID 1,
@@ -18,7 +18,7 @@ mkdir -p /run/picker /mnt/root
 # anything recoverable. So every stage that could leave
 # SELECTED_LINUX empty needs to be caught here first, with a real
 # fallback - either the first discovered kernel (same "first entry is
-# the default" convention PICKER_TIMEOUT_SECS uses in ui/picker.c) or,
+# the default" convention NIGHTFALL_TIMEOUT_SECS uses in ui/nightfall.c) or,
 # if there's no discovered kernel to fall back to at all, a rescue
 # shell instead of letting init exit and panic. Found and verified via
 # a standalone control-flow test (not hardware-dependent - pure shell
@@ -35,7 +35,7 @@ mkdir -p /run/picker /mnt/root
 #
 # Strictly best-effort. Every step can fail and the boot continues -
 # diagnostics must never be the reason a machine doesn't come up.
-BOOT_LOG=/mnt/root/boot/picker-last-boot.log
+BOOT_LOG=/mnt/root/boot/nightfall-last-boot.log
 stages=""
 stage() {
     stages="${stages}  - $1
@@ -135,17 +135,17 @@ save_log() {
         echo "--- /sys/bus/i2c/devices ---"
         ls /sys/bus/i2c/devices 2>&1 || true
         echo
-        if [ -s /run/picker/install.log ]; then
+        if [ -s /run/nightfall/install.log ]; then
             echo "--- kernel install output ---"
-            cat /run/picker/install.log 2>/dev/null
+            cat /run/nightfall/install.log 2>/dev/null
             echo
         fi
         echo "--- picker exit code: ${picker_rc:-n/a} ---"
         echo "--- picker stderr ---"
-        cat /run/picker/picker.stderr 2>/dev/null || echo "(none captured)"
+        cat /run/nightfall/nightfall.stderr 2>/dev/null || echo "(none captured)"
         echo
-        echo "--- menu.tsv (first 5 of $(cat /run/picker/menu.tsv 2>/dev/null | wc -l 2>/dev/null) entries) ---"
-        head -n5 /run/picker/menu.tsv 2>/dev/null || echo "(no menu)"
+        echo "--- menu.tsv (first 5 of $(cat /run/nightfall/menu.tsv 2>/dev/null | wc -l 2>/dev/null) entries) ---"
+        head -n5 /run/nightfall/menu.tsv 2>/dev/null || echo "(no menu)"
         echo
         # Pulled out first, because the whole dmesg below is long and
         # the question is nearly always "did this device's driver bind".
@@ -191,39 +191,39 @@ rescue() {
 : "${REAL_ROOT_DEV:=/dev/mmcblk0p2}"
 # eMMC probe is not instant, and a root mount that fails here drops
 # straight to the rescue shell - the harshest outcome in the script.
-wait_for "root device" "$REAL_ROOT_DEV" "${PICKER_WAIT_ROOT:-15}"
+wait_for "root device" "$REAL_ROOT_DEV" "${NIGHTFALL_WAIT_ROOT:-15}"
 stage "mounting real root ($REAL_ROOT_DEV)"
 if ! mount -o ro "$REAL_ROOT_DEV" /mnt/root; then
     rescue "failed to mount real root ($REAL_ROOT_DEV)"
 fi
 
 stage "discovering kernels from grub.cfg"
-if ! /bin/discover-kernels.sh /mnt/root/boot/grub/grub.cfg > /run/picker/menu.tsv.raw || [ ! -s /run/picker/menu.tsv.raw ]; then
+if ! /bin/discover-kernels.sh /mnt/root/boot/grub/grub.cfg > /run/nightfall/menu.tsv.raw || [ ! -s /run/nightfall/menu.tsv.raw ]; then
     rescue "no kernel entries found (discover-kernels.sh failed, or grub.cfg missing/empty)"
 fi
 
 # Moves a previously "Set Default"-marked entry to the front, if it's
 # still present - see apply-default.sh. A missing/stale marker just
 # passes the list through unchanged.
-DEFAULT_MARKER=/mnt/root/boot/picker-default
-CMDLINE_FILE=/mnt/root/boot/picker-cmdline
+DEFAULT_MARKER=/mnt/root/boot/nightfall-default
+CMDLINE_FILE=/mnt/root/boot/nightfall-cmdline
 
 # menu.tsv.raw -> menu.tsv. Shared by the initial build and by
 # refresh_menu after an install, so the two cannot drift apart.
 build_menu_files() {
-    /bin/apply-default.sh /run/picker/menu.tsv.raw "$DEFAULT_MARKER" > /run/picker/menu.tsv.def
+    /bin/apply-default.sh /run/nightfall/menu.tsv.raw "$DEFAULT_MARKER" > /run/nightfall/menu.tsv.def
 
     # Then each kernel's saved command line, if it has one. picker reads
     # the result straight out of the cmdline field, so what the Edit
     # screen shows is exactly what will be booted - one source of truth.
     # Best-effort: on failure the menu is simply what apply-default
     # produced, which is always bootable.
-    if /bin/apply-cmdline.sh /run/picker/menu.tsv.def "$CMDLINE_FILE" > /run/picker/menu.tsv.cl \
-       && [ -s /run/picker/menu.tsv.cl ]; then
-        cat /run/picker/menu.tsv.cl > /run/picker/menu.tsv
+    if /bin/apply-cmdline.sh /run/nightfall/menu.tsv.def "$CMDLINE_FILE" > /run/nightfall/menu.tsv.cl \
+       && [ -s /run/nightfall/menu.tsv.cl ]; then
+        cat /run/nightfall/menu.tsv.cl > /run/nightfall/menu.tsv
     else
         stage "saved command lines not applied (continuing without them)"
-        cat /run/picker/menu.tsv.def > /run/picker/menu.tsv
+        cat /run/nightfall/menu.tsv.def > /run/nightfall/menu.tsv
     fi
 }
 
@@ -231,20 +231,20 @@ build_menu_files
 
 # Fallback target if the picker itself fails for any reason (no touch
 # device, no DRM output, crash, ...).
-default_line=$(head -n1 /run/picker/menu.tsv)
+default_line=$(head -n1 /run/nightfall/menu.tsv)
 default_linux=$(printf '%s' "$default_line" | cut -f2)
 default_initrd=$(printf '%s' "$default_line" | cut -f3)
 default_cmdline=$(printf '%s' "$default_line" | cut -f4)
 
 # The Slate's panel is mounted rotated: 270 is upright, confirmed on
-# real hardware. ui/picker.c defaults to 0 when this is unset, which is
+# real hardware. ui/nightfall.c defaults to 0 when this is unset, which is
 # correct as a library default but wrong for the only machine this
 # initramfs is ever built for - so set it here rather than leaving the
 # first boot to come up sideways. Same transform drives touch, so an
 # unset value is cosmetic (taps still land on the buttons you see)
 # rather than broken - which is exactly why it could go unnoticed.
-: "${PICKER_ROTATE:=270}"
-export PICKER_ROTATE
+: "${NIGHTFALL_ROTATE:=270}"
+export NIGHTFALL_ROTATE
 
 # stderr goes to a file rather than the console: it carries picker's own
 # diagnostics (chosen touch device, DRM open failures) plus LVGL's log,
@@ -252,8 +252,8 @@ export PICKER_ROTATE
 # on the console it scrolls past behind the kexec faster than anyone can
 # read it. It gets replayed to the screen on the failure path below, and
 # copied into the boot log either way.
-# NOTE: picker waits for its own DRM and touch devices (PICKER_WAIT_SECS,
-# see ui/picker.c). init deliberately does NOT gate on them here.
+# NOTE: picker waits for its own DRM and touch devices (NIGHTFALL_WAIT_SECS,
+# see ui/nightfall.c). init deliberately does NOT gate on them here.
 #
 # It used to, and the check was worse than useless: "does any
 # /dev/input/event* exist" was satisfied instantly by the unrelated
@@ -266,8 +266,8 @@ export PICKER_ROTATE
 # Installable tarballs for the Install menu. Entirely optional: a
 # failure here just means that menu comes up empty, which must never be
 # a reason not to boot.
-/bin/discover-tarballs.sh /mnt/root > /run/picker/tarballs.tsv 2>/dev/null || \
-    : > /run/picker/tarballs.tsv
+/bin/discover-tarballs.sh /mnt/root > /run/nightfall/tarballs.tsv 2>/dev/null || \
+    : > /run/nightfall/tarballs.tsv
 
 # External drives, and the backups already on them. The same script
 # picker re-runs when the user taps Rescan: the drive usually CANNOT be
@@ -275,24 +275,24 @@ export PICKER_ROTATE
 # firmware booting a bootable USB stick instead of the picker. So this
 # is the first look, not the only one.
 /bin/scan-drives.sh "$REAL_ROOT_DEV" /mnt/root \
-    /run/picker/targets.tsv /run/picker/backups.tsv 2>/dev/null || {
-        : > /run/picker/targets.tsv
-        : > /run/picker/backups.tsv
+    /run/nightfall/targets.tsv /run/nightfall/backups.tsv 2>/dev/null || {
+        : > /run/nightfall/targets.tsv
+        : > /run/nightfall/backups.tsv
     }
 
 # grub.cfg changes when a kernel is installed, so the menu has to be
 # rebuilt from it - otherwise the list still omits what was just added,
 # which looks exactly like the install having done nothing.
 refresh_menu() {
-    if /bin/discover-kernels.sh /mnt/root/boot/grub/grub.cfg > /run/picker/menu.tsv.raw \
-       && [ -s /run/picker/menu.tsv.raw ]; then
+    if /bin/discover-kernels.sh /mnt/root/boot/grub/grub.cfg > /run/nightfall/menu.tsv.raw \
+       && [ -s /run/nightfall/menu.tsv.raw ]; then
         build_menu_files
-        default_line=$(head -n1 /run/picker/menu.tsv)
+        default_line=$(head -n1 /run/nightfall/menu.tsv)
         default_linux=$(printf '%s' "$default_line" | cut -f2)
         default_initrd=$(printf '%s' "$default_line" | cut -f3)
         default_cmdline=$(printf '%s' "$default_line" | cut -f4)
     fi
-    /bin/discover-tarballs.sh /mnt/root > /run/picker/tarballs.tsv 2>/dev/null || :
+    /bin/discover-tarballs.sh /mnt/root > /run/nightfall/tarballs.tsv 2>/dev/null || :
 }
 
 # Installing a kernel returns to the menu rather than booting, so the
@@ -304,9 +304,9 @@ refresh_menu() {
 install_rounds=0
 while :; do
 stage "running picker"
-if /bin/picker /run/picker/menu.tsv /run/picker/tarballs.tsv "$CMDLINE_FILE" \
-        /run/picker/targets.tsv /run/picker/backups.tsv \
-        > /run/picker/selected 2>/run/picker/picker.stderr; then
+if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_FILE" \
+        /run/nightfall/targets.tsv /run/nightfall/backups.tsv \
+        > /run/nightfall/selected 2>/run/nightfall/nightfall.stderr; then
     picker_rc=0
     # Sets SELECTED_LINUX/INITRD/CMDLINE and SELECTED_BY, or SET_DEFAULT=1
     # if "Set Default" was used, or INSTALL_TARBALL if the user chose to
@@ -314,7 +314,7 @@ if /bin/picker /run/picker/menu.tsv /run/picker/tarballs.tsv "$CMDLINE_FILE" \
     INSTALL_TARBALL=
     RELOAD=
     SET_CMDLINE=
-    . /run/picker/selected
+    . /run/nightfall/selected
 
     # picker ran the install itself and showed its progress, so there is
     # nothing to install here - only a stale kernel list to refresh.
@@ -348,9 +348,9 @@ if /bin/picker /run/picker/menu.tsv /run/picker/tarballs.tsv "$CMDLINE_FILE" \
             # busybox ash has no PIPESTATUS, so the status comes back
             # through a file instead of being inferred.
             { /bin/install-kernel.sh /mnt/root "$INSTALL_TARBALL" 2>&1; \
-              echo $? > /run/picker/install.rc; } \
-              | tee -a /run/picker/install.log >&2
-            if [ "$(cat /run/picker/install.rc 2>/dev/null || echo 1)" = 0 ]; then
+              echo $? > /run/nightfall/install.rc; } \
+              | tee -a /run/nightfall/install.log >&2
+            if [ "$(cat /run/nightfall/install.rc 2>/dev/null || echo 1)" = 0 ]; then
                 stage "install succeeded"
                 echo "picker: install finished - returning to the menu." >&2
             else
@@ -358,7 +358,7 @@ if /bin/picker /run/picker/menu.tsv /run/picker/tarballs.tsv "$CMDLINE_FILE" \
                 echo "picker: install FAILED - see the message above." >&2
                 echo "picker: nothing was removed; existing kernels still boot." >&2
             fi
-            sleep "${PICKER_INSTALL_PAUSE:-6}"
+            sleep "${NIGHTFALL_INSTALL_PAUSE:-6}"
 
             refresh_menu
             continue
@@ -397,10 +397,10 @@ if [ -n "${picker_failed:-}" ]; then
     # then silence tail's own errors. The other order aims fd1 at the
     # /dev/null that fd2 has just become, and this replay - the only
     # copy anyone without SSH will ever see - vanishes.
-    tail -n15 /run/picker/picker.stderr >&2 2>/dev/null || echo "picker:   (none)" >&2
-    echo "picker: full details saved to /boot/picker-last-boot.log" >&2
+    tail -n15 /run/nightfall/nightfall.stderr >&2 2>/dev/null || echo "picker:   (none)" >&2
+    echo "picker: full details saved to /boot/nightfall-last-boot.log" >&2
     echo "picker: ================================================" >&2
-    sleep "${PICKER_FALLBACK_PAUSE:-8}"
+    sleep "${NIGHTFALL_FALLBACK_PAUSE:-8}"
 fi
 
 if [ -z "$SELECTED_LINUX" ]; then
@@ -426,12 +426,12 @@ if [ -n "${SET_CMDLINE:-}" ]; then
         # new value is non-empty. awk rather than sed: the key is a path
         # full of slashes.
         if [ -f "$CMDLINE_FILE" ]; then
-            awk -F'\t' -v k="$_ck" '$1 != k' "$CMDLINE_FILE" > /run/picker/cl.new 2>/dev/null || : > /run/picker/cl.new
+            awk -F'\t' -v k="$_ck" '$1 != k' "$CMDLINE_FILE" > /run/nightfall/cl.new 2>/dev/null || : > /run/nightfall/cl.new
         else
-            : > /run/picker/cl.new
+            : > /run/nightfall/cl.new
         fi
-        [ -n "$_cv" ] && printf '%s\t%s\n' "$_ck" "$_cv" >> /run/picker/cl.new
-        if cat /run/picker/cl.new > "$CMDLINE_FILE" 2>/dev/null; then
+        [ -n "$_cv" ] && printf '%s\t%s\n' "$_ck" "$_cv" >> /run/nightfall/cl.new
+        if cat /run/nightfall/cl.new > "$CMDLINE_FILE" 2>/dev/null; then
             if [ -n "$_cv" ]; then stage "saved command line for $_ck"
             else stage "cleared the saved command line for $_ck"; fi
         else

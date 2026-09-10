@@ -115,7 +115,7 @@ fi
 # pointing at a kernel that no longer exists is survivable -
 # apply-default.sh treats a stale marker as "no marker" - but it would
 # silently stop working with no clue why, so clear it here.
-marker=$root/boot/picker-default
+marker=$root/boot/nightfall-default
 if [ -f "$marker" ] && grep -qx "/boot/vmlinuz-$release" "$marker" 2>/dev/null; then
     rm -f "$marker" && say "cleared the saved default (it pointed at this kernel)"
 fi

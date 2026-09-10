@@ -12,7 +12,7 @@ set -eu
 root=${1:?usage: discover-backups.sh <root-mount> <target-partition>}
 target=${2:?usage: discover-backups.sh <root-mount> <target-partition>}
 
-probe=/run/picker/probe-backups
+probe=/run/nightfall/probe-backups
 mkdir -p "$probe" 2>/dev/null || true
 mount -o ro "$target" "$probe" 2>/dev/null || exit 0
 

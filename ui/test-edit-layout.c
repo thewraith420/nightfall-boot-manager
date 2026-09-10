@@ -54,7 +54,7 @@ int main(void) {
 
     printf("edit dialog z-order (%dx%d logical)\n", W, H);
 
-    /* Mirrors picker.c's edit_cb construction order. */
+    /* Mirrors nightfall.c's edit_cb construction order. */
     lv_obj_t *mbox = lv_msgbox_create(NULL);
     lv_obj_set_width(mbox, lv_pct(92));
     lv_msgbox_add_title(mbox, "Edit boot command line");

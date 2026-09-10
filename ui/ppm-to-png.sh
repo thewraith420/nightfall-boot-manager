@@ -1,5 +1,5 @@
 #!/bin/sh
-# Converts the PPMs that PICKER_SCREENSHOT_DIR produces into PNGs.
+# Converts the PPMs that NIGHTFALL_SCREENSHOT_DIR produces into PNGs.
 #
 #   ./ppm-to-png.sh /tmp/shots/*.ppm
 #
