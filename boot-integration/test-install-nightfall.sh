@@ -32,7 +32,18 @@ EOF
   echo 'set default="picker"' > "$SB/boot/grub/grub.cfg"
 
   printf '#!/bin/sh\necho "Linux kernel x86 boot executable bzImage"\n' > "$SB/bin/file"
-  printf '#!/bin/sh\necho 076aa633-aff9-4f0f-98a7-f939eb74e7ff\n'      > "$SB/bin/findmnt"
+  # findmnt is asked two different questions: the UUID of /boot's
+  # filesystem, and where that filesystem is mounted. Answering both with
+  # a UUID (as this mock once did) means "is /boot a separate partition?"
+  # is always false and that whole branch goes untested - which is exactly
+  # how it kept a stale /picker/ path through the rename.
+  cat > "$SB/bin/findmnt" <<EOF
+#!/bin/sh
+case "\$*" in
+  *TARGET*) [ -n "\${BOOT_IS_SEPARATE:-}" ] && echo /boot || echo / ;;
+  *)        echo 076aa633-aff9-4f0f-98a7-f939eb74e7ff ;;
+esac
+EOF
   # The script runs update-grub with output suppressed - it verifies the
   # RESULT rather than trusting the chatter - so the mock records that it
   # ran in a file the test can see.
@@ -46,6 +57,7 @@ EOF
 }
 run() {
   PATH="$SB/bin:$PATH" NIGHTFALL_BOOT="$SB/boot" NIGHTFALL_GRUB_DEFAULT="$SB/etc/grub" \
+    BOOT_IS_SEPARATE="${BOOT_IS_SEPARATE:-}" \
     sh "$S" "$SB/kernel.img" "$SB/initramfs.img" >"$SB/out" 2>&1
   echo $?
 }
@@ -84,6 +96,20 @@ printf '%s\n' /boot/vmlinuz-KEEP > "$SB/boot/nightfall-default"
 run >/dev/null
 grep -qx "/boot/vmlinuz-KEEP" "$SB/boot/nightfall-default" \
   && ok "leaves an existing nightfall-default alone" || bad "overwrote a newer setting with the old one"
+
+echo "=== the entry points at files that actually exist, in both /boot layouts ==="
+# Paths in the entry are relative to the filesystem GRUB sees, so the two
+# layouts need different strings - and a wrong one here is not a cosmetic
+# bug, it is an entry that boots to "file not found".
+setup 0 yes; run >/dev/null
+cfg | grep -q "linux[[:space:]]*/boot/nightfall/vmlinuz" \
+  && ok "shared /boot: entry uses /boot/nightfall/vmlinuz" || bad "wrong path: $(cfg | grep linux)"
+
+setup 0 yes; BOOT_IS_SEPARATE=1 run >/dev/null
+cfg | grep -q "linux[[:space:]]*/nightfall/vmlinuz" \
+  && ok "separate /boot: entry drops the /boot prefix" || bad "wrong path: $(cfg | grep linux)"
+cfg | grep -q "/picker/" && bad "still points into the pre-rename directory" \
+  || ok "and points into the renamed directory, not the old one"
 
 echo "=== a machine that never had the old name is unaffected ==="
 setup 0 yes

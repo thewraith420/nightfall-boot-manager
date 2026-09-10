@@ -131,8 +131,8 @@ boot_uuid=$(findmnt -no UUID --target /boot 2>/dev/null || true)
 # with a separate /boot partition the leading /boot is not part of the
 # path GRUB sees.
 if findmnt -no TARGET --target /boot | grep -qx /boot; then
-    kpath=/picker/vmlinuz
-    ipath=/picker/initramfs.img
+    kpath=/nightfall/vmlinuz
+    ipath=/nightfall/initramfs.img
 else
     kpath=/boot/nightfall/vmlinuz
     ipath=/boot/nightfall/initramfs.img

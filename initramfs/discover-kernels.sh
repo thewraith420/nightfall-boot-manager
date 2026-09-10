@@ -3,7 +3,14 @@
 # submenu is just a display wrapper, real kernel entries are commonly
 # nested one level inside "Advanced options for ..." submenus) and
 # emits one "title<TAB>linux-path<TAB>initrd-path<TAB>cmdline" line per
-# entry, excluding the picker's own entry (--id picker).
+# entry, excluding Nightfall's own entry (--id nightfall, or --id picker
+# from before the rename).
+#
+# Excluding ourselves is not cosmetic. A self-entry in the list can be
+# chosen as the DEFAULT kernel, and the default is what init boots when
+# the menu fails to come up - so the one path that exists to rescue a
+# broken menu would kexec straight back into Nightfall. On a tablet with
+# no keyboard there is nothing to interrupt that with.
 #
 # Usage: discover-kernels.sh /path/to/grub.cfg > menu.tsv
 
@@ -54,7 +61,9 @@ frame_type[depth] == "menuentry" && ($1 == "initrd" || $1 == "initrdefi" || $1 =
 }
 
 is_closing_brace($0) {
-    if (frame_type[depth] == "menuentry" && title[depth] != "" && id[depth] != "picker" \
+    if (frame_type[depth] == "menuentry" && title[depth] != "" \
+        && id[depth] != "nightfall" && id[depth] != "picker" \
+        && linux[depth] !~ /(^|\/)(nightfall|picker)\/vmlinuz/ \
         && linux[depth] ~ /vmlinuz/) {
         printf "%s\t%s\t%s\t%s\n", title[depth], linux[depth], initrd[depth], cmdline[depth]
     }
