@@ -157,6 +157,46 @@ int main(void) {
         g_targets = NULL; g_target_n = 0; g_backups = NULL; g_backup_n = 0;
     }
 
+    /* --- tar's checkpoints, made readable --- */
+    {
+        /* tar counts RECORDS and prints "Write checkpoint 4900000",
+         * which during a real backup read as alarming rather than
+         * informative. With the total announced up front this becomes
+         * "50.2 GB of 86.0 GB (58%)". */
+        show_progress("head", "subj", "warn");
+
+        prog_append("backup: picker-total-kb: 90177536");        /* ~86 GiB */
+        ck(g_prog_n == 0, "the total line is internal and stays out of the log");
+
+        prog_append("/usr/bin/tar: Write checkpoint 4900000");
+        ck(g_prog_n == 0, "checkpoints stay out of the log too, or they flood it");
+        /* The status label is LONG_DOT; without a resolved width it
+         * ellipsises to "..." and every assertion below would be
+         * testing LVGL's truncation rather than our formatting. */
+        lv_obj_update_layout(lv_screen_active());
+        {
+            const char *shown = lv_label_get_text(g_prog_status);
+            ck(strstr(shown, "GB") != NULL, "progress is shown in GB, not records");
+            ck(strstr(shown, "of") != NULL && strstr(shown, "%") != NULL,
+               "and as a fraction of the whole job");
+            /* 4900000 * 10240 = 50.176e9 bytes = 46.7 GiB of 86 GiB = 54% */
+            ck(strstr(shown, "46.7 GB") != NULL, "converts records to bytes correctly");
+            ck(strstr(shown, "(54%)") != NULL, "and the percentage matches");
+        }
+
+        /* Real steps must still reach the log. */
+        prog_append("backup: mounting /dev/sda1");
+        ck(g_prog_n == 1 && strstr(g_prog_lines[0], "mounting") != NULL,
+           "ordinary output still lands in the rolling log");
+
+        /* Without a total it degrades to a plain byte count. */
+        show_progress("h", "s", "w");
+        prog_append("/usr/bin/tar: Write checkpoint 100000");
+        lv_obj_update_layout(lv_screen_active());
+        ck(strstr(lv_label_get_text(g_prog_status), "written") != NULL,
+           "with no total known it still reports how much has been written");
+    }
+
     /* --- rescan: the drive cannot be present at boot --- */
     {
         /* With no keyboard, plugging the Ventoy stick in before reboot

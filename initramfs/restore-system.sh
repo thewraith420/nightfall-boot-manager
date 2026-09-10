@@ -91,6 +91,9 @@ elif [ -x "$root/bin/tar" ];     then TAR=/bin/tar
 else die "no tar inside the target system - cannot restore with its own tools"
 fi
 
+arch_k=$(ls -l "$archive" 2>/dev/null | awk '{print int($5/1024)}')
+[ -n "${arch_k:-}" ] && [ "$arch_k" -gt 0 ] 2>/dev/null && say "picker-total-kb: $arch_k"
+
 say "extracting (this takes a while - do not power off)"
 chroot "$root" "$TAR" \
     --checkpoint=50000 --checkpoint-action=echo \

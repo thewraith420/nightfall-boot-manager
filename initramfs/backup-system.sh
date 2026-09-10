@@ -89,6 +89,11 @@ archive=/mnt/$BACKUP_DIR/$name.tar
 # Pseudo-filesystems and volatile state. /mnt is the target itself.
 # Everything else is faithful, including /home and /var - a restore
 # should put the machine back, not approximately back.
+# Machine-readable, for picker's progress display. tar's own checkpoint
+# lines count RECORDS, which is not a unit anyone thinks in - knowing the
+# total lets the UI turn them into "50 GB of 86 GB" instead.
+[ -n "${used_k:-}" ] && say "picker-total-kb: $used_k"
+
 say "writing $archive (this takes a while - the source stays read-only)"
 chroot "$root" "$TAR" \
     --checkpoint=50000 --checkpoint-action=echo \

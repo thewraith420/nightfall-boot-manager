@@ -142,6 +142,19 @@ int main(int argc, char **argv) {
     prog_append("install-kernel: preparing chroot");
     prog_append("install-kernel: depmod 7.2.3-BobZKernel-pixel-slate");
     prog_append("install-kernel: update-initramfs -c -k 7.2.3-BobZKernel-pixel-slate (slow - do not power off)");
+
+    /* A backup mid-run, showing the readable progress rather than tar's
+     * record counter. */
+    show_progress(LV_SYMBOL_SAVE "  Backing up", "Ventoy",
+                  "Reads the whole system. Minutes, not seconds. Do not unplug the drive.");
+    prog_append("backup: mounting /dev/sda1");
+    prog_append("backup: source in use: 86G, free on target: 742G");
+    prog_append("backup: using /usr/bin/tar from the target system");
+    prog_append("backup: picker-total-kb: 90177536");
+    prog_append("backup: writing /mnt/nocturne-backups/picker-backup-20260909-2140.tar");
+    prog_append("/usr/bin/tar: Write checkpoint 4900000");
+    lv_refr_now(disp);
+    screenshot("backup-progress");
     lv_refr_now(disp);
     screenshot("install-progress");
 

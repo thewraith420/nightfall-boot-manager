@@ -90,14 +90,13 @@ device: it is the reason a broken touchscreen cannot strand you.
 
 ### Screenshots
 
-<img src="docs/screenshots/01-menu.png" width="24%"> <img src="docs/screenshots/02-kernel-list.png" width="24%"> <img src="docs/screenshots/03-install-list.png" width="24%"> <img src="docs/screenshots/04-remove-list.png" width="24%">
+<img src="docs/screenshots/01-menu.png" width="24%"> <img src="docs/screenshots/02-kernel-list.png" width="24%"> <img src="docs/screenshots/05-backup-menu.png" width="24%"> <img src="docs/screenshots/06-restore-list.png" width="24%">
 
-<img src="docs/screenshots/05-backup-menu.png" width="24%"> <img src="docs/screenshots/06-restore-list.png" width="24%"> <img src="docs/screenshots/09-confirm-dialog.png" width="24%"> <img src="docs/screenshots/10-edit-dialog.png" width="24%">
+<img src="docs/screenshots/08-backup-progress.png" width="24%"> <img src="docs/screenshots/04-remove-list.png" width="24%"> <img src="docs/screenshots/10-confirm-dialog.png" width="24%"> <img src="docs/screenshots/11-edit-dialog.png" width="24%">
 
-*Top: the main menu, installed kernels (checkmarks mark the saved default),
-tarballs available to install, and kernels available to remove. Bottom: the
-backup menu, existing backups on the drive, the boot confirm dialog, and
-Edit's on-screen keyboard.*
+*Top: the main menu, installed kernels, the backup menu, and backups found on
+the drive. Bottom: a backup in progress, kernels available to remove, the boot
+confirm dialog, and Edit's on-screen keyboard.*
 
 These are real renders of the current code, not mockups:
 `ui/render-screens.c` includes `picker.c` and calls the same `build_ui()` /

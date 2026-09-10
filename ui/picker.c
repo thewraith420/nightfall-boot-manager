@@ -1207,8 +1207,59 @@ static const char *install_script(void) {
 
 static void prog_done_cb(lv_event_t *e) { (void)e; g_reload = 1; }
 
+/* tar's default blocking factor is 20 records of 512 bytes, and nothing
+ * here changes it, so one checkpoint unit is 10240 bytes. */
+#define TAR_RECORD_BYTES 10240.0
+
+static double g_prog_total;   /* bytes, 0 when unknown */
+static double g_prog_done;
+
+static void human_bytes(double b, char *out, size_t n) {
+    if (b >= 1073741824.0)   snprintf(out, n, "%.1f GB", b / 1073741824.0);
+    else if (b >= 1048576.0) snprintf(out, n, "%.0f MB", b / 1048576.0);
+    else                     snprintf(out, n, "%.0f KB", b / 1024.0);
+}
+
+/* Turns tar's checkpoint lines into something a person can read.
+ *
+ * tar counts RECORDS, so it emits "Write checkpoint 4900000" - a number
+ * in units nobody thinks in, which during the first real backup looked
+ * alarming enough to nearly stop a run that was working perfectly. The
+ * scripts now announce the total up front, so this can say
+ * "50.2 GB of 86.0 GB (58%)" instead.
+ *
+ * Returns 1 if the line was progress and should not go in the log:
+ * checkpoints arrive every 500MB and would otherwise flood the rolling
+ * tail, pushing out the steps that actually say what is happening. */
+static int prog_consume_progress(const char *line) {
+    const char *p;
+
+    if ((p = strstr(line, "picker-total-kb:")) != NULL) {
+        g_prog_total = strtod(p + strlen("picker-total-kb:"), NULL) * 1024.0;
+        return 1;
+    }
+    if ((p = strstr(line, "Write checkpoint ")) == NULL) return 0;
+
+    g_prog_done = strtod(p + strlen("Write checkpoint "), NULL) * TAR_RECORD_BYTES;
+    if (!g_prog_status) return 1;
+
+    char done[32], total[32], msg[128];
+    human_bytes(g_prog_done, done, sizeof(done));
+    if (g_prog_total > 0) {
+        int pct = (int)((g_prog_done / g_prog_total) * 100.0);
+        if (pct > 99) pct = 99;      /* the last of it is headers and flush */
+        human_bytes(g_prog_total, total, sizeof(total));
+        snprintf(msg, sizeof(msg), "%s of %s  (%d%%)", done, total, pct);
+    } else {
+        snprintf(msg, sizeof(msg), "%s written", done);
+    }
+    lv_label_set_text(g_prog_status, msg);
+    return 1;
+}
+
 static void prog_append(const char *line) {
     if (!*line) return;
+    if (prog_consume_progress(line)) return;
     if (g_prog_n < 8) {
         snprintf(g_prog_lines[g_prog_n++], sizeof(g_prog_lines[0]), "%s", line);
     } else {
@@ -1229,6 +1280,8 @@ static void prog_append(const char *line) {
 static void show_progress(const char *heading, const char *subject, const char *warning) {
     lv_obj_clean(g_list);
     g_prog_n = 0;
+    g_prog_total = 0;
+    g_prog_done = 0;
     g_installing = 1;
     if (g_countdown) lv_obj_add_flag(g_countdown, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(g_header, heading);
