@@ -18,25 +18,16 @@ static void dummy_flush(lv_display_t *d, const lv_area_t *a, uint8_t *p) {
     (void)a; (void)p; lv_display_flush_ready(d);
 }
 
-/* Drains the child exactly the way the main loop does. */
+/* Drains the child through the REAL loop - install_pump() in nightfall.c -
+ * rather than a copy of it. The copy that used to live here carried the
+ * same buffer-full bug as the original, which is precisely why having two
+ * of them was worthless. */
 static int drain(void) {
-    char buf[512]; size_t len = 0;
-    for (;;) {
-        ssize_t got = read(g_install_fd, buf + len, sizeof(buf) - len - 1);
-        if (got > 0) {
-            len += (size_t)got; buf[len] = '\0';
-            char *start = buf, *nl;
-            while ((nl = strchr(start, '\n'))) { *nl = '\0'; prog_append(start); start = nl + 1; }
-            len = strlen(start); memmove(buf, start, len + 1);
-        } else {
-            close(g_install_fd); g_install_fd = -1;
-            if (len) { buf[len] = '\0'; prog_append(buf); }
-            int st = 0;
-            waitpid(g_install_pid, &st, 0);
-            g_install_pid = -1;
-            return WIFEXITED(st) && WEXITSTATUS(st) == 0;
-        }
-    }
+    char buf[512];
+    size_t len = 0;
+    while (install_pump(buf, sizeof(buf), &len))
+        ;
+    return g_child_exit_ok;
 }
 
 int main(void) {
@@ -88,6 +79,28 @@ int main(void) {
     g_prog_n = 0;
     ck(start_install(0) == 0, "starts a failing install too");
     ck(drain() == 0, "reports FAILURE for an exit-1 install (not silently ok)");
+
+    /* --- a line longer than the read buffer --- */
+    /* tar and the chroot tools can emit a very long path on one line, and
+     * the buffer only holds 511 bytes of it. Getting this wrong is not a
+     * cosmetic truncation: with the buffer full and no newline there is no
+     * room left, read() is handed a count of 0, and 0 is what read()
+     * returns at EOF - so the UI used to close the pipe and announce the
+     * job had finished while it was still running. */
+    f = fopen("/tmp/mock-install-long.sh", "w");
+    fprintf(f, "#!/bin/sh\n"
+               "i=0; while [ $i -lt 90 ]; do printf '0123456789'; i=$((i+1)); done\n"
+               "printf '\\n'\n"
+               "echo LAST_LINE_AFTER_THE_LONG_ONE\n"
+               "exit 0\n");
+    fclose(f); chmod("/tmp/mock-install-long.sh", 0755);
+    setenv("NIGHTFALL_INSTALL_SH", "/tmp/mock-install-long.sh", 1);
+    g_prog_n = 0;
+    ck(start_install(0) == 0, "starts a child that emits a 900-byte line");
+    ck(drain() == 1, "still reports the real exit status, not a phantom EOF");
+    ck(g_prog_n >= 2, "kept reading past the over-long line");
+    ck(strstr(g_prog_lines[g_prog_n - 1], "LAST_LINE_AFTER_THE_LONG_ONE") != NULL,
+       "output written AFTER the long line still reaches the screen");
 
     /* --- recovery entries fold into their kernel's dialog --- */
     static struct entry rec[4] = {

@@ -1150,6 +1150,7 @@ static int g_tarball_n;
  * VT, say - none of this engages and picker falls back to writing
  * INSTALL_TARBALL for init to act on, exactly as before. */
 static int   g_install_fd  = -1;      /* read end of the child's output */
+static int   g_child_exit_ok = 0;     /* set by install_pump when the child is reaped */
 static pid_t g_install_pid = -1;
 static int   g_reload = 0;            /* finished: ask init to re-scan */
 static lv_obj_t *g_prog_status;
@@ -1336,6 +1337,59 @@ static void install_finished(int ok) {
     lv_obj_center(l);
     lv_obj_add_event_cb(done, prog_done_cb, LV_EVENT_CLICKED, NULL);
     screenshot_soon(ok ? "child-done" : "child-failed");
+}
+
+/* Consumes whatever the running child has written, dispatching complete
+ * lines to the progress screen. buf/*len carry the tail of a partial
+ * line between calls - the child writes whenever it likes, so a read
+ * landing mid-line is normal and printing fragments would be wrong.
+ *
+ * Returns 1 while the child is still going, 0 once it has finished - at
+ * which point the pipe is closed, the child reaped, g_child_exit_ok set
+ * and install_finished() called.
+ *
+ * This lives in one place on purpose. The test used to carry its own
+ * copy of this loop, which meant the copy could drift from what really
+ * runs on the device - and it did: both had the bug below, so no test
+ * could ever have found it. */
+static int install_pump(char *buf, size_t bufsz, size_t *len)
+{
+    /* Never hand read() a count of zero. A line longer than the buffer
+     * fills it with no newline to flush, leaving no room - and
+     * read(fd, p, 0) returns 0, which is indistinguishable from EOF. The
+     * UI would close the pipe and announce the job had finished while
+     * tar was still running. Flush the over-long line and carry on. */
+    if (*len >= bufsz - 1) {
+        buf[bufsz - 1] = '\0';
+        prog_append(buf);
+        *len = 0;
+    }
+
+    ssize_t got = read(g_install_fd, buf + *len, bufsz - 1 - *len);
+    if (got > 0) {
+        *len += (size_t)got;
+        buf[*len] = '\0';
+        char *start = buf, *nl;
+        while ((nl = strchr(start, '\n'))) {
+            *nl = '\0';
+            prog_append(start);
+            start = nl + 1;
+        }
+        *len = strlen(start);
+        memmove(buf, start, *len + 1);
+        return 1;
+    }
+
+    /* EOF: the child closed its output, so it is done. */
+    close(g_install_fd);
+    g_install_fd = -1;
+    if (*len) { buf[*len] = '\0'; prog_append(buf); *len = 0; }
+    int st = 0;
+    if (g_install_pid > 0) waitpid(g_install_pid, &st, 0);
+    g_install_pid = -1;
+    g_child_exit_ok = WIFEXITED(st) && WEXITSTATUS(st) == 0;
+    install_finished(g_child_exit_ok);
+    return 0;
 }
 
 /* 0: child started, the UI takes over. -1: caller should fall back to
@@ -2208,33 +2262,10 @@ int main(int argc, char **argv) {
                 }
             }
         }
-        /* Output from the running install, line by line onto the
-         * progress screen. Partial reads are normal - the child writes
-         * whenever it feels like it - so hold the tail until a newline
-         * rather than printing fragments. */
+        /* Output from the running child, line by line onto the
+         * progress screen - see install_pump(). */
         if (inst_idx >= 0 && (fds[inst_idx].revents & (POLLIN | POLLHUP))) {
-            ssize_t got = read(g_install_fd, inst_buf + inst_len, sizeof(inst_buf) - inst_len - 1);
-            if (got > 0) {
-                inst_len += (size_t)got;
-                inst_buf[inst_len] = '\0';
-                char *start = inst_buf, *nl;
-                while ((nl = strchr(start, '\n'))) {
-                    *nl = '\0';
-                    prog_append(start);
-                    start = nl + 1;
-                }
-                inst_len = strlen(start);
-                memmove(inst_buf, start, inst_len + 1);
-            } else {
-                /* EOF: the child closed its output, so it is done. */
-                close(g_install_fd);
-                g_install_fd = -1;
-                if (inst_len) { inst_buf[inst_len] = '\0'; prog_append(inst_buf); inst_len = 0; }
-                int st = 0;
-                if (g_install_pid > 0) waitpid(g_install_pid, &st, 0);
-                g_install_pid = -1;
-                install_finished(WIFEXITED(st) && WEXITSTATUS(st) == 0);
-            }
+            install_pump(inst_buf, sizeof(inst_buf), &inst_len);
         }
 
         if (g_selected >= 0 || g_install >= 0 || g_reload) break;
