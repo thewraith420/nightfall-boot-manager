@@ -34,7 +34,7 @@ die() { echo "backup: ERROR: $*" >&2; exit 1; }
 [ -d "$root/mnt" ] || die "$root/mnt does not exist - cannot mount the target inside the chroot"
 
 BACKUP_DIR=nocturne-backups
-[ -n "$name" ] || name=picker-backup-$(date +%Y%m%d-%H%M 2>/dev/null || echo manual)
+[ -n "$name" ] || name=nightfall-backup-$(date +%Y%m%d-%H%M 2>/dev/null || echo manual)
 
 mounted=0
 cleanup() {
@@ -92,7 +92,7 @@ archive=/mnt/$BACKUP_DIR/$name.tar
 # Machine-readable, for picker's progress display. tar's own checkpoint
 # lines count RECORDS, which is not a unit anyone thinks in - knowing the
 # total lets the UI turn them into "50 GB of 86 GB" instead.
-[ -n "${used_k:-}" ] && say "picker-total-kb: $used_k"
+[ -n "${used_k:-}" ] && say "nightfall-total-kb: $used_k"
 
 say "writing $archive (this takes a while - the source stays read-only)"
 chroot "$root" "$TAR" \

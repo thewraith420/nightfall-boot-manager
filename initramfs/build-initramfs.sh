@@ -45,7 +45,7 @@ need_cmd fakeroot
   Debian/Ubuntu: sudo apt install busybox-static cpio gzip fakeroot"
 
 kexec_bin=$(command -v kexec || true)
-[ -n "$kexec_bin" ] || die "kexec not found - the picker's whole job is to kexec.
+[ -n "$kexec_bin" ] || die "kexec not found - Nightfall's whole job is to kexec.
   Debian/Ubuntu: sudo apt install kexec-tools"
 
 nightfall_bin=$repo/ui/nightfall

@@ -12,7 +12,7 @@
 #include "nightfall.c"
 #undef main
 
-static void flush_reference(struct picker_ctx *ctx, const lv_area_t *area, uint8_t *px_map) {
+static void flush_reference(struct nightfall_ctx *ctx, const lv_area_t *area, uint8_t *px_map) {
     int w = area->x2 - area->x1 + 1;
     uint32_t *src = (uint32_t *)px_map;
     for (int ly = area->y1; ly <= area->y2; ly++) {
@@ -39,7 +39,7 @@ int main(void) {
     da.stride = db.stride = PW * 4;
     da.map = malloc(fbsz); db.map = malloc(fbsz);
 
-    struct picker_ctx ca = { .drm = &da }, cb = { .drm = &db };
+    struct nightfall_ctx ca = { .drm = &da }, cb = { .drm = &db };
     lv_display_t *disp = lv_display_create(PW, PH);   /* only for flush_ready */
     lv_display_set_user_data(disp, &cb);
 

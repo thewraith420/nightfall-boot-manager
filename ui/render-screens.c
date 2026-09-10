@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
     if (!drm.map) return 1;
 
     int rot = ROT_270;
-    struct picker_ctx ctx = {
+    struct nightfall_ctx ctx = {
         .drm = &drm, .rot = rot,
         .cw = (rot == ROT_90 || rot == ROT_270) ? PANEL_H : PANEL_W,
         .ch = (rot == ROT_90 || rot == ROT_270) ? PANEL_W : PANEL_H,
@@ -83,8 +83,8 @@ int main(int argc, char **argv) {
         { "/dev/sda1", "exfat", "Ventoy", "931G", "742G" },
     };
     static struct backup bk[2] = {
-        { "/dev/sda1", "picker-backup-20260909-1140", "Tue Sep  9 11:40:02 2026", "84G" },
-        { "/dev/sda1", "picker-backup-20260901-2210", "Tue Sep  1 22:10:44 2026", "81G" },
+        { "/dev/sda1", "nightfall-backup-20260909-1140", "Tue Sep  9 11:40:02 2026", "84G" },
+        { "/dev/sda1", "nightfall-backup-20260901-2210", "Tue Sep  1 22:10:44 2026", "81G" },
     };
     g_targets = tg; g_target_n = 1;
     g_backups = bk; g_backup_n = 2;
@@ -150,8 +150,8 @@ int main(int argc, char **argv) {
     prog_append("backup: mounting /dev/sda1");
     prog_append("backup: source in use: 86G, free on target: 742G");
     prog_append("backup: using /usr/bin/tar from the target system");
-    prog_append("backup: picker-total-kb: 90177536");
-    prog_append("backup: writing /mnt/nocturne-backups/picker-backup-20260909-2140.tar");
+    prog_append("backup: nightfall-total-kb: 90177536");
+    prog_append("backup: writing /mnt/nocturne-backups/nightfall-backup-20260909-2140.tar");
     prog_append("/usr/bin/tar: Write checkpoint 4900000");
     lv_refr_now(disp);
     screenshot("backup-progress");

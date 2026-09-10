@@ -40,7 +40,7 @@ stages=""
 stage() {
     stages="${stages}  - $1
 "
-    echo "picker: $1" >&2
+    echo "nightfall: $1" >&2
 }
 
 # As PID 1 we are in a footrace with driver probe: a real boot log shows
@@ -88,15 +88,15 @@ wait_for() { _wait_glob=$2; wait_until "$1 ($2)" _have_wait_glob "$3"; }
 # apply-default uses (see below) - and puts it back read-only after.
 save_log() {
     [ -d /mnt/root/boot ] || {
-        echo "picker: (real root not mounted - cannot save a boot log)" >&2
+        echo "nightfall: (real root not mounted - cannot save a boot log)" >&2
         return 0
     }
     mount -o remount,rw /mnt/root 2>/dev/null || {
-        echo "picker: (could not remount rw - cannot save a boot log)" >&2
+        echo "nightfall: (could not remount rw - cannot save a boot log)" >&2
         return 0
     }
     {
-        echo "=== nocturne picker boot log ==="
+        echo "=== Nightfall boot log ==="
         echo "outcome:  $1"
         echo "when:     $(date 2>/dev/null || echo '(no clock)')"
         echo "kernel:   $(uname -r 2>/dev/null)"
@@ -117,7 +117,7 @@ save_log() {
         # If picker never drew anything, the reason is usually that one
         # of these is simply absent - which is instant to see here and
         # near-impossible to guess at from a blank screen.
-        echo "--- /dev/dri (DRM - picker cannot draw without this) ---"
+        echo "--- /dev/dri (DRM - Nightfall cannot draw without this) ---"
         ls -l /dev/dri 2>&1 || true
         echo
         echo "--- /dev/input (touch) ---"
@@ -140,8 +140,8 @@ save_log() {
             cat /run/nightfall/install.log 2>/dev/null
             echo
         fi
-        echo "--- picker exit code: ${picker_rc:-n/a} ---"
-        echo "--- picker stderr ---"
+        echo "--- nightfall exit code: ${nightfall_rc:-n/a} ---"
+        echo "--- nightfall stderr ---"
         cat /run/nightfall/nightfall.stderr 2>/dev/null || echo "(none captured)"
         echo
         echo "--- menu.tsv (first 5 of $(cat /run/nightfall/menu.tsv 2>/dev/null | wc -l 2>/dev/null) entries) ---"
@@ -163,7 +163,7 @@ save_log() {
         echo "--- dmesg (full, up to 2000 lines) ---"
         dmesg 2>/dev/null | head -n2000 || echo "(dmesg unavailable)"
     } > "$BOOT_LOG" 2>/dev/null || \
-        echo "picker: (failed to write $BOOT_LOG)" >&2
+        echo "nightfall: (failed to write $BOOT_LOG)" >&2
     # Flush before kexec: the new kernel does not replay this page cache.
     sync 2>/dev/null || true
     mount -o remount,ro /mnt/root 2>/dev/null || true
@@ -172,8 +172,8 @@ save_log() {
 
 rescue() {
     save_log "rescue: $1"
-    echo "picker: $1" >&2
-    echo "picker: dropping to a rescue shell" >&2
+    echo "nightfall: $1" >&2
+    echo "nightfall: dropping to a rescue shell" >&2
     exec /bin/sh
 }
 
@@ -303,11 +303,11 @@ refresh_menu() {
 # rounds we stop offering and just boot something.
 install_rounds=0
 while :; do
-stage "running picker"
+stage "running nightfall"
 if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_FILE" \
         /run/nightfall/targets.tsv /run/nightfall/backups.tsv \
         > /run/nightfall/selected 2>/run/nightfall/nightfall.stderr; then
-    picker_rc=0
+    nightfall_rc=0
     # Sets SELECTED_LINUX/INITRD/CMDLINE and SELECTED_BY, or SET_DEFAULT=1
     # if "Set Default" was used, or INSTALL_TARBALL if the user chose to
     # install instead of boot. Exactly one of the last two.
@@ -323,7 +323,7 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
     if [ -n "$RELOAD" ]; then
         install_rounds=$((install_rounds + 1))
         if [ "$install_rounds" -le 3 ]; then
-            stage "reloading the menu after an in-picker install"
+            stage "reloading the menu after an in-Nightfall install"
             refresh_menu
             continue
         fi
@@ -337,8 +337,8 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
         else
             stage "installing $INSTALL_TARBALL"
             echo "" >&2
-            echo "picker: installing a kernel - this takes several minutes." >&2
-            echo "picker: do NOT power off." >&2
+            echo "nightfall: installing a kernel - this takes several minutes." >&2
+            echo "nightfall: do NOT power off." >&2
             # Captured as well as shown: on the console it scrolls past
             # behind the reboot, and "the install failed" without the
             # reason is exactly the blind spot the boot log exists to
@@ -352,11 +352,11 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
               | tee -a /run/nightfall/install.log >&2
             if [ "$(cat /run/nightfall/install.rc 2>/dev/null || echo 1)" = 0 ]; then
                 stage "install succeeded"
-                echo "picker: install finished - returning to the menu." >&2
+                echo "nightfall: install finished - returning to the menu." >&2
             else
                 stage "INSTALL FAILED for $INSTALL_TARBALL"
-                echo "picker: install FAILED - see the message above." >&2
-                echo "picker: nothing was removed; existing kernels still boot." >&2
+                echo "nightfall: install FAILED - see the message above." >&2
+                echo "nightfall: nothing was removed; existing kernels still boot." >&2
             fi
             sleep "${NIGHTFALL_INSTALL_PAUSE:-6}"
 
@@ -365,8 +365,8 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
         fi
     fi
 else
-    picker_rc=$?
-    picker_failed="picker exited $picker_rc"
+    nightfall_rc=$?
+    nightfall_failed="nightfall exited $nightfall_rc"
     SELECTED_LINUX="$default_linux"
     SELECTED_INITRD="$default_initrd"
     SELECTED_CMDLINE="$default_cmdline"
@@ -375,7 +375,7 @@ break
 done
 
 if [ -z "$SELECTED_LINUX" ]; then
-    picker_failed="${picker_failed:-picker produced no selection}"
+    nightfall_failed="${nightfall_failed:-nightfall produced no selection}"
     SELECTED_LINUX="$default_linux"
     SELECTED_INITRD="$default_initrd"
     SELECTED_CMDLINE="$default_cmdline"
@@ -385,21 +385,21 @@ fi
 # first boot attempt undebuggable - it looks identical to GRUB ignoring
 # the selection. Say so on screen, show why, and hold long enough to
 # read or photograph it before the kexec wipes the display.
-if [ -n "${picker_failed:-}" ]; then
-    stage "FALLBACK: $picker_failed"
+if [ -n "${nightfall_failed:-}" ]; then
+    stage "FALLBACK: $nightfall_failed"
     echo "" >&2
-    echo "picker: ================================================" >&2
-    echo "picker: the menu could not be shown ($picker_failed)." >&2
-    echo "picker: booting the default entry instead:" >&2
-    echo "picker:   $SELECTED_LINUX" >&2
-    echo "picker: last lines of picker's own output:" >&2
+    echo "nightfall: ================================================" >&2
+    echo "nightfall: the menu could not be shown ($nightfall_failed)." >&2
+    echo "nightfall: booting the default entry instead:" >&2
+    echo "nightfall:   $SELECTED_LINUX" >&2
+    echo "nightfall: last lines of Nightfall's own output:" >&2
     # Redirection order matters: point stdout at the real stderr FIRST,
     # then silence tail's own errors. The other order aims fd1 at the
     # /dev/null that fd2 has just become, and this replay - the only
     # copy anyone without SSH will ever see - vanishes.
-    tail -n15 /run/nightfall/nightfall.stderr >&2 2>/dev/null || echo "picker:   (none)" >&2
-    echo "picker: full details saved to /boot/nightfall-last-boot.log" >&2
-    echo "picker: ================================================" >&2
+    tail -n15 /run/nightfall/nightfall.stderr >&2 2>/dev/null || echo "nightfall:   (none)" >&2
+    echo "nightfall: full details saved to /boot/nightfall-last-boot.log" >&2
+    echo "nightfall: ================================================" >&2
     sleep "${NIGHTFALL_FALLBACK_PAUSE:-8}"
 fi
 
@@ -435,30 +435,30 @@ if [ -n "${SET_CMDLINE:-}" ]; then
             if [ -n "$_cv" ]; then stage "saved command line for $_ck"
             else stage "cleared the saved command line for $_ck"; fi
         else
-            echo "picker: failed to save the command line (continuing anyway)" >&2
+            echo "nightfall: failed to save the command line (continuing anyway)" >&2
         fi
         sync 2>/dev/null || true
         mount -o remount,ro /mnt/root 2>/dev/null || \
-            echo "picker: failed to remount root read-only after saving the command line" >&2
+            echo "nightfall: failed to remount root read-only after saving the command line" >&2
     else
-        echo "picker: could not remount rw to save the command line (continuing anyway)" >&2
+        echo "nightfall: could not remount rw to save the command line (continuing anyway)" >&2
     fi
 fi
 
 if [ "${SET_DEFAULT:-}" = "1" ]; then
     if mount -o remount,rw /mnt/root; then
         if ! printf '%s\n' "$SELECTED_LINUX" > "$DEFAULT_MARKER" 2>/dev/null; then
-            echo "picker: failed to write default preference (continuing anyway)" >&2
+            echo "nightfall: failed to write default preference (continuing anyway)" >&2
         fi
         mount -o remount,ro /mnt/root || \
-            echo "picker: failed to remount root read-only after saving default (continuing anyway)" >&2
+            echo "nightfall: failed to remount root read-only after saving default (continuing anyway)" >&2
     else
-        echo "picker: failed to remount root read-write to save default preference (continuing anyway)" >&2
+        echo "nightfall: failed to remount root read-write to save default preference (continuing anyway)" >&2
     fi
 fi
 
-if [ -n "${picker_failed:-}" ]; then
-    save_log "fell back: $picker_failed"
+if [ -n "${nightfall_failed:-}" ]; then
+    save_log "fell back: $nightfall_failed"
 else
     save_log "booted user selection"
 fi

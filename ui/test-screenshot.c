@@ -16,7 +16,7 @@ int main(void) {
     d.width = PW; d.height = PH; d.stride = PW * 4;
     d.map = calloc((size_t)PW * PH, 4);
 
-    struct picker_ctx c = { .drm = &d, .rot = ROT_270, .cw = PH, .ch = PW };
+    struct nightfall_ctx c = { .drm = &d, .rot = ROT_270, .cw = PH, .ch = PW };
     g_ctx = &c; g_shot_dir = "/tmp";
 
     /* ROT_270: logical(0,0) -> physical(px=ly=0, py=cw-1-lx=PH-1).

@@ -124,7 +124,7 @@ int main(void) {
         ck(!strcmp(tg[0].freespace, "742G"), "free space is carried through for the dialog");
 
         FILE *bf = fopen("/tmp/mock-backups", "w");
-        fprintf(bf, "/dev/sda1\tpicker-backup-20260909-1200\tTue Sep 9 12:00\t84G\n");
+        fprintf(bf, "/dev/sda1\tnightfall-backup-20260909-1200\tTue Sep 9 12:00\t84G\n");
         fprintf(bf, "/dev/sda1\tonly-a-name\n");   /* short row: still usable */
         fprintf(bf, "\tno-target\n");             /* no target: unusable, skip */
         fclose(bf);
@@ -132,7 +132,7 @@ int main(void) {
         int bn = load_backups("/tmp/mock-backups", bk, 8);
         ck(bn == 2, "a row without a target device is skipped, a short one is not");
         ck(!strcmp(bk[0].target, "/dev/sda1"), "restore knows which drive to mount");
-        ck(!strcmp(bk[0].name, "picker-backup-20260909-1200"), "and which archive to use");
+        ck(!strcmp(bk[0].name, "nightfall-backup-20260909-1200"), "and which archive to use");
         ck(!strcmp(bk[1].when, "unknown"), "a missing date degrades rather than breaking");
 
         /* The launchers must pass the drive and the archive separately -
@@ -151,7 +151,7 @@ int main(void) {
         ck(start_restore(0) == 0, "starts the restore child");
         ck(drain() == 1, "reports success");
         ck(strstr(g_prog_lines[0], "target=/dev/sda1") != NULL, "passes the drive as argument 2");
-        ck(strstr(g_prog_lines[0], "name=picker-backup-20260909-1200") != NULL,
+        ck(strstr(g_prog_lines[0], "name=nightfall-backup-20260909-1200") != NULL,
            "passes the archive name as argument 3");
         remove("/tmp/mock-restore.sh"); remove("/tmp/mock-targets"); remove("/tmp/mock-backups");
         g_targets = NULL; g_target_n = 0; g_backups = NULL; g_backup_n = 0;
@@ -165,7 +165,7 @@ int main(void) {
          * "50.2 GB of 86.0 GB (58%)". */
         show_progress("head", "subj", "warn");
 
-        prog_append("backup: picker-total-kb: 90177536");        /* ~86 GiB */
+        prog_append("backup: nightfall-total-kb: 90177536");        /* ~86 GiB */
         ck(g_prog_n == 0, "the total line is internal and stays out of the log");
 
         prog_append("/usr/bin/tar: Write checkpoint 4900000");

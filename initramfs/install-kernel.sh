@@ -102,5 +102,5 @@ chroot "$root" /usr/sbin/update-grub || die "update-grub failed"
 
 sync
 say "installed $release successfully"
-say "it will appear in the picker's kernel list on the next boot"
+say "it will appear in Nightfall's kernel list on the next boot"
 exit 0

@@ -61,9 +61,9 @@ setup yes 0 0
 rc=$(run)
 [ "$rc" = 0 ] && ok "restores" || bad "failed: $(out | tail -2)"
 out | grep -q "MARKER_EXTRACT.*--exclude=/boot/nightfall" \
-  && ok "never restores over the picker itself" || bad "would overwrite /boot/nightfall"
+  && ok "never restores over Nightfall itself" || bad "would overwrite /boot/nightfall"
 out | grep -q "MARKER_EXTRACT.*--exclude=/boot/grub/custom.cfg" \
-  && ok "keeps the picker's GRUB entry (an old backup would not have it)" || bad "would drop the picker's menu entry"
+  && ok "keeps Nightfall's GRUB entry (an old backup would not have it)" || bad "would drop Nightfall's menu entry"
 out | grep -q "MARKER_EXTRACT.*-xpf" && ok "extracts preserving permissions" || bad "no -p"
 out | grep -qE "MARKER_EXTRACT [^ ]+ /usr/bin/tar" \
   && ok "runs the target's GNU tar by absolute path, not busybox's applet" \

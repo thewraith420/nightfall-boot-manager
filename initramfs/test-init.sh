@@ -105,7 +105,7 @@ EOF
   case "$2" in
     ok)    cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
-echo "picker mock: drew the menu" >&2
+echo "nightfall mock: drew the menu" >&2
 echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
 echo 'SELECTED_INITRD=/boot/initrd.img-chosen'
 echo 'SELECTED_CMDLINE=ro quiet'
@@ -113,8 +113,8 @@ echo 'SELECTED_BY=timeout'
 exit 0
 EOF
     ;;
-    crash) printf '#!/bin/sh\necho "picker mock: MARKER_DRM_OPEN_FAILED /dev/dri/card0" >&2\nexit 3\n' > "$SB/bin/nightfall" ;;
-    empty) printf '#!/bin/sh\necho "picker mock: chose nothing" >&2\nexit 0\n' > "$SB/bin/nightfall" ;;
+    crash) printf '#!/bin/sh\necho "nightfall mock: MARKER_DRM_OPEN_FAILED /dev/dri/card0" >&2\nexit 3\n' > "$SB/bin/nightfall" ;;
+    empty) printf '#!/bin/sh\necho "nightfall mock: chose nothing" >&2\nexit 0\n' > "$SB/bin/nightfall" ;;
     install) cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
 # First run asks for an install; later runs boot. Models the real flow,
@@ -220,7 +220,7 @@ run() {
 log()  { cat "$SB/mnt/root/boot/nightfall-last-boot.log" 2>/dev/null; }
 both() { cat "$SB/out" "$SB/err" 2>/dev/null; }
 
-echo "=== 1. happy path: picker returns a selection ==="
+echo "=== 1. happy path: nightfall returns a selection ==="
 setup happy ok 0 0; run
 both | grep -q "MARKER_KEXEC.*vmlinuz-chosen" && ok "kexecs the user's choice" || bad "did not kexec the choice"
 log  | grep -qx "outcome:  booted user selection" && ok "log outcome line exact" || bad "outcome wrong: [$(log | grep outcome)]"
@@ -228,23 +228,23 @@ log  | grep -q "MARKER_DMESG_LINE"    && ok "log captures dmesg" || bad "no dmes
 log  | grep -q "MARKER_EARLY_I2C_PROBE" && ok "early probe line survives 300 later lines (was lost to tail -150)" || bad "early dmesg line lost - the log cannot answer 'did the driver bind'"
 log  | sed -n "/hardware probe lines/,/full, up to/p" | grep -q "MARKER_EARLY_I2C_PROBE" && ok "probe lines pulled into their own section" || bad "no probe summary section"
 log  | sed -n "/hardware probe lines/,/full, up to/p" | grep -q "MARKER_SPAM" && bad "probe section polluted with unrelated noise" || ok "probe section excludes unrelated spam"
-log  | grep -q "drew the menu"        && ok "log captures picker stderr" || bad "no picker stderr in log"
+log  | grep -q "drew the menu"        && ok "log captures nightfall stderr" || bad "no nightfall stderr in log"
 log  | grep -qx "chosen_by=timeout"   && ok "log distinguishes timeout auto-boot from a real tap" || bad "chosen_by wrong: [$(log | grep chosen_by)]"
 both | grep -q "MARKER_RESCUE"        && bad "unexpectedly hit rescue" || ok "no rescue on happy path"
 log  | grep -q "waiting for"          && bad "waited despite devices being present" || ok "no wait when devices already there"
 
-echo "=== 2. picker crashes (the first-boot suspect) ==="
+echo "=== 2. nightfall crashes (the first-boot suspect) ==="
 setup crash crash 0 0; run
 both | grep -q "MARKER_KEXEC.*vmlinuz-real"  && ok "falls back to first discovered kernel" || bad "no fallback kexec"
 both | grep -q "the menu could not be shown" && ok "says so ON SCREEN (was silent before)" || bad "still silent on screen"
-both | grep -q "MARKER_DRM_OPEN_FAILED"      && ok "replays picker stderr to screen" || bad "stderr not shown on screen"
-log  | grep -q "picker exit code: 3"         && ok "log records exit code 3" || bad "exit code missing"
-log  | grep -qx "outcome:  fell back: picker exited 3" && ok "log outcome exact (no duplication)" || bad "outcome wrong: [$(log | grep outcome)]"
+both | grep -q "MARKER_DRM_OPEN_FAILED"      && ok "replays nightfall stderr to screen" || bad "stderr not shown on screen"
+log  | grep -q "nightfall exit code: 3"         && ok "log records exit code 3" || bad "exit code missing"
+log  | grep -qx "outcome:  fell back: nightfall exited 3" && ok "log outcome exact (no duplication)" || bad "outcome wrong: [$(log | grep outcome)]"
 
-echo "=== 3. picker exits 0 but selects nothing ==="
+echo "=== 3. nightfall exits 0 but selects nothing ==="
 setup empty empty 0 0; run
 both | grep -q "MARKER_KEXEC.*vmlinuz-real" && ok "falls back" || bad "no fallback"
-log  | grep -qx "outcome:  fell back: picker produced no selection" && ok "distinguished from a crash" || bad "outcome wrong: [$(log | grep outcome)]"
+log  | grep -qx "outcome:  fell back: nightfall produced no selection" && ok "distinguished from a crash" || bad "outcome wrong: [$(log | grep outcome)]"
 
 echo "=== 4. root mount fails -> rescue ==="
 setup mountfail ok 1 0; run
@@ -272,7 +272,7 @@ both | grep -q "TIMEOUT: root device"        && ok "reports the timeout on scree
 both | grep -q "MARKER_RESCUE_SHELL_REACHED" && ok "drops to rescue rather than hanging" || bad "did not reach rescue"
 both | grep -q "MARKER_KEXEC"                && bad "kexec'd with no root!" || ok "does not kexec"
 
-echo "=== 8. Install: picker asks to install, then boots ==="
+echo "=== 8. Install: nightfall asks to install, then boots ==="
 rm -f /tmp/pickruns; setup inst install 0 0; run
 both | grep -q "MARKER_INSTALL_RAN /home/bob/k-installer.tar.gz" && ok "runs install-kernel.sh with the chosen tarball" || bad "install-kernel.sh not run"
 log  | grep -q "MARKER_PICKER_RUN_2"        && ok "returns to the menu instead of booting straight away" || bad "did not re-show the menu"
@@ -323,7 +323,7 @@ grep -qx "/boot/vmlinuz-other	keep_me" "$SB/mnt/root/boot/nightfall-cmdline" 2>/
   && ok "another kernel's saved line is untouched" || bad "clobbered a different kernel"
 log | grep -q "cleared the saved command line" && ok "logged as a clear, not a save" || bad "wrong log line"
 
-echo "=== 10. RELOAD: picker installed it itself, only wants a refresh ==="
+echo "=== 10. RELOAD: nightfall installed it itself, only wants a refresh ==="
 rm -f /tmp/pickruns; setup rel reload 0 0; run
 both | grep -q "MARKER_INSTALL_RAN"          && bad "installed AGAIN - RELOAD must not re-install" || ok "does NOT re-install (RELOAD is not INSTALL_TARBALL)"
 log  | grep -q "reloading the menu"          && ok "refreshes the kernel list" || bad "no refresh recorded"

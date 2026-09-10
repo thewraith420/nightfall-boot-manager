@@ -92,7 +92,7 @@ else die "no tar inside the target system - cannot restore with its own tools"
 fi
 
 arch_k=$(ls -l "$archive" 2>/dev/null | awk '{print int($5/1024)}')
-[ -n "${arch_k:-}" ] && [ "$arch_k" -gt 0 ] 2>/dev/null && say "picker-total-kb: $arch_k"
+[ -n "${arch_k:-}" ] && [ "$arch_k" -gt 0 ] 2>/dev/null && say "nightfall-total-kb: $arch_k"
 
 say "extracting (this takes a while - do not power off)"
 chroot "$root" "$TAR" \
@@ -116,5 +116,5 @@ chroot "$root" /usr/sbin/update-grub || \
 
 sync
 say "restore complete"
-say "the picker and its menu entry were left untouched, as always"
+say "Nightfall and its menu entry were left untouched, as always"
 exit 0

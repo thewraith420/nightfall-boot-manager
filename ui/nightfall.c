@@ -132,7 +132,7 @@ struct backup {
 static int load_entries(const char *path, struct entry *entries, int max) {
     FILE *fp = fopen(path, "r");
     if (!fp) {
-        fprintf(stderr, "picker: cannot open %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "nightfall: cannot open %s: %s\n", path, strerror(errno));
         return -1;
     }
     char line[1200];
@@ -285,13 +285,13 @@ static int drm_try_open(struct drm_dev *d, const char *path) {
     memset(d, 0, sizeof(*d));
     d->fd = open(path, O_RDWR | O_CLOEXEC);
     if (d->fd < 0) {
-        fprintf(stderr, "picker: %s: open failed: %s\n", path, strerror(errno));
+        fprintf(stderr, "nightfall: %s: open failed: %s\n", path, strerror(errno));
         return -1;
     }
 
     drmModeRes *res = drmModeGetResources(d->fd);
     if (!res) {
-        fprintf(stderr, "picker: %s: drmModeGetResources failed: %s\n", path, strerror(errno));
+        fprintf(stderr, "nightfall: %s: drmModeGetResources failed: %s\n", path, strerror(errno));
         close(d->fd);
         return -1;
     }
@@ -304,7 +304,7 @@ static int drm_try_open(struct drm_dev *d, const char *path) {
         drmModeFreeConnector(c);
     }
     if (!conn) {
-        fprintf(stderr, "picker: %s: no connected connector with a mode\n", path);
+        fprintf(stderr, "nightfall: %s: no connected connector with a mode\n", path);
         drmModeFreeResources(res);
         close(d->fd);
         return -1;
@@ -332,7 +332,7 @@ static int drm_try_open(struct drm_dev *d, const char *path) {
     }
     if (enc) drmModeFreeEncoder(enc);
     if (!crtc_id) {
-        fprintf(stderr, "picker: %s: connector %u has no usable encoder/crtc\n", path, d->conn_id);
+        fprintf(stderr, "nightfall: %s: connector %u has no usable encoder/crtc\n", path, d->conn_id);
         drmModeFreeConnector(conn);
         drmModeFreeResources(res);
         close(d->fd);
@@ -347,7 +347,7 @@ static int drm_try_open(struct drm_dev *d, const char *path) {
     creq.height = d->mode.vdisplay;
     creq.bpp = 32;
     if (drmIoctl(d->fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) {
-        fprintf(stderr, "picker: %s: DRM_IOCTL_MODE_CREATE_DUMB failed: %s\n", path, strerror(errno));
+        fprintf(stderr, "nightfall: %s: DRM_IOCTL_MODE_CREATE_DUMB failed: %s\n", path, strerror(errno));
         close(d->fd);
         return -1;
     }
@@ -358,7 +358,7 @@ static int drm_try_open(struct drm_dev *d, const char *path) {
     d->handle = creq.handle;
 
     if (drmModeAddFB(d->fd, d->width, d->height, 24, 32, d->stride, d->handle, &d->fb_id) < 0) {
-        fprintf(stderr, "picker: %s: drmModeAddFB failed: %s\n", path, strerror(errno));
+        fprintf(stderr, "nightfall: %s: drmModeAddFB failed: %s\n", path, strerror(errno));
         close(d->fd);
         return -1;
     }
@@ -366,14 +366,14 @@ static int drm_try_open(struct drm_dev *d, const char *path) {
     struct drm_mode_map_dumb mreq = {0};
     mreq.handle = d->handle;
     if (drmIoctl(d->fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq) < 0) {
-        fprintf(stderr, "picker: %s: DRM_IOCTL_MODE_MAP_DUMB failed: %s\n", path, strerror(errno));
+        fprintf(stderr, "nightfall: %s: DRM_IOCTL_MODE_MAP_DUMB failed: %s\n", path, strerror(errno));
         close(d->fd);
         return -1;
     }
 
     d->map = mmap(0, d->size, PROT_READ | PROT_WRITE, MAP_SHARED, d->fd, (off_t)mreq.offset);
     if (d->map == MAP_FAILED) {
-        fprintf(stderr, "picker: %s: mmap of dumb buffer failed: %s\n", path, strerror(errno));
+        fprintf(stderr, "nightfall: %s: mmap of dumb buffer failed: %s\n", path, strerror(errno));
         close(d->fd);
         return -1;
     }
@@ -381,7 +381,7 @@ static int drm_try_open(struct drm_dev *d, const char *path) {
 
     d->saved_crtc = drmModeGetCrtc(d->fd, d->crtc_id);
     if (drmModeSetCrtc(d->fd, d->crtc_id, d->fb_id, 0, 0, &d->conn_id, 1, &d->mode) < 0) {
-        fprintf(stderr, "picker: %s: drmModeSetCrtc failed: %s (need DRM master - "
+        fprintf(stderr, "nightfall: %s: drmModeSetCrtc failed: %s (need DRM master - "
                         "is another display server running?)\n", path, strerror(errno));
         munmap(d->map, d->size);
         close(d->fd);
@@ -422,7 +422,7 @@ static void drm_close(struct drm_dev *d) {
 static int vt_setup(void) {
     int vt_fd = open("/dev/tty0", O_RDWR);
     if (vt_fd < 0) {
-        fprintf(stderr, "picker: cannot open /dev/tty0 for VT switch cooperation: %s "
+        fprintf(stderr, "nightfall: cannot open /dev/tty0 for VT switch cooperation: %s "
                         "(continuing without it)\n", strerror(errno));
         return -1;
     }
@@ -431,7 +431,7 @@ static int vt_setup(void) {
     mode.relsig = VT_RELEASE_SIG;
     mode.acqsig = VT_ACQUIRE_SIG;
     if (ioctl(vt_fd, VT_SETMODE, &mode) < 0) {
-        fprintf(stderr, "picker: VT_SETMODE failed: %s (continuing without VT switch cooperation)\n",
+        fprintf(stderr, "nightfall: VT_SETMODE failed: %s (continuing without VT switch cooperation)\n",
                 strerror(errno));
         close(vt_fd);
         return -1;
@@ -554,7 +554,7 @@ static int touch_open(struct touch_dev *t) {
     closedir(dir);
     if (found_fd < 0) return -1;
 
-    fprintf(stderr, "picker: touch device: %s (\"%s\"), INPUT_PROP_DIRECT=%s, multitouch=%s\n",
+    fprintf(stderr, "nightfall: touch device: %s (\"%s\"), INPUT_PROP_DIRECT=%s, multitouch=%s\n",
             found_path, found_name, found_direct ? "yes" : "no", found_is_mt ? "yes" : "no");
 
     t->fd = found_fd;
@@ -583,7 +583,7 @@ static void touch_to_logical(const struct touch_dev *t, int rot, int cw, int ch,
 
 /* ---------------- LVGL display + input glue ---------------- */
 
-struct picker_ctx {
+struct nightfall_ctx {
     struct drm_dev *drm;
     int rot;
     int cw, ch; /* logical dims, as passed to lv_display_create */
@@ -592,7 +592,7 @@ struct picker_ctx {
 };
 
 static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
-    struct picker_ctx *ctx = lv_display_get_user_data(disp);
+    struct nightfall_ctx *ctx = lv_display_get_user_data(disp);
     struct drm_dev *d = ctx->drm;
     const int cw = ctx->cw, ch = ctx->ch;
     const int aw = area->x2 - area->x1 + 1;   /* source row stride */
@@ -622,7 +622,7 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
         static int warned;
         if (!warned) {
             warned = 1;
-            fprintf(stderr, "picker: display %dx%d does not match framebuffer %ux%u "
+            fprintf(stderr, "nightfall: display %dx%d does not match framebuffer %ux%u "
                             "for rotation - skipping flush\n", cw, ch, d->width, d->height);
         }
         lv_display_flush_ready(disp);
@@ -672,7 +672,7 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 }
 
 static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
-    struct picker_ctx *ctx = lv_indev_get_user_data(indev);
+    struct nightfall_ctx *ctx = lv_indev_get_user_data(indev);
     data->point.x = ctx->touch_x;
     data->point.y = ctx->touch_y;
     data->state = ctx->touch_down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
@@ -698,7 +698,7 @@ static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
  *
  * PPM because it is ~15 lines of code and needs no zlib in the
  * initramfs; ui/ppm-to-png.sh converts afterwards on a normal machine. */
-static struct picker_ctx *g_ctx;
+static struct nightfall_ctx *g_ctx;
 static const char *g_shot_dir;
 static const char *g_shot_pending;
 static int g_shot_n;
@@ -712,7 +712,7 @@ static void screenshot(const char *tag) {
     snprintf(path, sizeof(path), "%s/%02d-%s.ppm", g_shot_dir, ++g_shot_n, tag);
     FILE *f = fopen(path, "wb");
     if (!f) {
-        fprintf(stderr, "picker: screenshot %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "nightfall: screenshot %s: %s\n", path, strerror(errno));
         return;
     }
     fprintf(f, "P6\n%d %d\n255\n", cw, ch);
@@ -734,7 +734,7 @@ static void screenshot(const char *tag) {
     }
     free(row);
     fclose(f);
-    fprintf(stderr, "picker: screenshot -> %s (%dx%d)\n", path, cw, ch);
+    fprintf(stderr, "nightfall: screenshot -> %s (%dx%d)\n", path, cw, ch);
 }
 
 /* Requested from inside an event callback, taken by the main loop after
@@ -1234,8 +1234,8 @@ static void human_bytes(double b, char *out, size_t n) {
 static int prog_consume_progress(const char *line) {
     const char *p;
 
-    if ((p = strstr(line, "picker-total-kb:")) != NULL) {
-        g_prog_total = strtod(p + strlen("picker-total-kb:"), NULL) * 1024.0;
+    if ((p = strstr(line, "nightfall-total-kb:")) != NULL) {
+        g_prog_total = strtod(p + strlen("nightfall-total-kb:"), NULL) * 1024.0;
         return 1;
     }
     if ((p = strstr(line, "Write checkpoint ")) == NULL) return 0;
@@ -1573,7 +1573,7 @@ static void restore_click_cb(lv_event_t *e) {
              "Writes this backup over the current system. Files created "
              "since the backup are NOT removed - this puts the system "
              "back, it does not rewind it.\n\n"
-             "The picker itself is never overwritten.",
+             "Nightfall itself is never overwritten.",
              g_backups[idx].name, g_backups[idx].when, g_backups[idx].size);
     simple_confirm(idx, "Restore this backup?", body, "Restore", restore_confirm_cb, 1);
     screenshot_soon("restore-dialog");
@@ -1720,7 +1720,7 @@ static void add_back_row(void (*target)(void)) {
 
 static void show_main_menu(void) {
     lv_obj_clean(g_list);
-    lv_label_set_text(g_header, LV_SYMBOL_POWER "  Boot picker");
+    lv_label_set_text(g_header, LV_SYMBOL_POWER "  Nightfall");
 
     char buf[96];
     snprintf(buf, sizeof(buf), "Boot a kernel   (%d installed)", count_bootable_rows());
@@ -1789,7 +1789,7 @@ static void show_backup_menu(void) {
                              "Plug the drive in now, then tap Rescan.\n\n"
                              "It cannot be plugged in before booting: with no\n"
                              "keyboard attached the firmware would boot the\n"
-                             "USB stick instead of the picker.");
+                             "USB stick instead of Nightfall.");
         lv_obj_set_style_text_color(l, lv_color_hex(0x93a0aa), 0);
     }
 }
@@ -1957,7 +1957,7 @@ static void build_ui(struct entry *entries, int n, int timeout_secs, lv_obj_t **
 
 static void lvgl_log_to_stderr(lv_log_level_t level, const char *buf) {
     (void)level;
-    fprintf(stderr, "picker: lvgl: %s", buf);
+    fprintf(stderr, "nightfall: lvgl: %s", buf);
 }
 
 static void shell_quote(FILE *out, const char *name, const char *value) {
@@ -1989,13 +1989,13 @@ static int wait_for_device(const char *what, struct drm_dev *drm, struct touch_d
     for (;;) {
         if ((drm ? drm_open_first_connected(drm) : touch_open(touch)) == 0) {
             if (waited)
-                fprintf(stderr, "picker: %s appeared after %d.%03ds\n",
+                fprintf(stderr, "nightfall: %s appeared after %d.%03ds\n",
                         what, waited / 1000, waited % 1000);
             return 0;
         }
         if (waited >= limit_ms) {
             if (limit_ms)
-                fprintf(stderr, "picker: gave up waiting for %s after %ds\n",
+                fprintf(stderr, "nightfall: gave up waiting for %s after %ds\n",
                         what, limit_ms / 1000);
             return -1;
         }
@@ -2017,7 +2017,7 @@ int main(int argc, char **argv) {
     struct entry entries[MAX_ENTRIES];
     int n = load_entries(argv[1], entries, MAX_ENTRIES);
     if (n <= 0) {
-        fprintf(stderr, "picker: no kernel entries found in %s\n", argv[1]);
+        fprintf(stderr, "nightfall: no kernel entries found in %s\n", argv[1]);
         return 1;
     }
     g_entries = entries;
@@ -2065,19 +2065,19 @@ int main(int argc, char **argv) {
      * component that owns the criteria should own the waiting. */
     struct drm_dev drm;
     if (wait_for_device("connected DRM output", &drm, NULL) != 0) {
-        fprintf(stderr, "picker: no connected DRM output found\n");
+        fprintf(stderr, "nightfall: no connected DRM output found\n");
         return 1;
     }
 
     struct touch_dev touch;
     if (wait_for_device("touch input device", NULL, &touch) != 0) {
-        fprintf(stderr, "picker: no touch input device found\n");
+        fprintf(stderr, "nightfall: no touch input device found\n");
         drm_close(&drm);
         return 1;
     }
 
     int rot = parse_rotation();
-    struct picker_ctx ctx = {
+    struct nightfall_ctx ctx = {
         .drm = &drm,
         .rot = rot,
         .cw = (rot == ROT_90 || rot == ROT_270) ? (int)drm.height : (int)drm.width,
@@ -2105,7 +2105,7 @@ int main(int argc, char **argv) {
     size_t buf_size = (size_t)ctx.cw * 64 * 4; /* partial buffer, 64 logical rows */
     void *lvgl_buf = malloc(buf_size);
     if (!lvgl_buf) {
-        fprintf(stderr, "picker: out of memory allocating LVGL draw buffer\n");
+        fprintf(stderr, "nightfall: out of memory allocating LVGL draw buffer\n");
         drm_close(&drm);
         return 1;
     }
@@ -2315,7 +2315,7 @@ int main(int argc, char **argv) {
          * NOT install anything a second time, which is why this is a
          * different key from INSTALL_TARBALL. */
         shell_quote(stdout, "RELOAD", "1");
-        fprintf(stderr, "picker: install finished, asking for a menu reload\n");
+        fprintf(stderr, "nightfall: install finished, asking for a menu reload\n");
         return 0;
     }
 
@@ -2325,12 +2325,12 @@ int main(int argc, char **argv) {
          * that only knows about SELECTED_LINUX will find nothing to
          * source rather than silently booting the wrong thing. */
         shell_quote(stdout, "INSTALL_TARBALL", g_tarballs[g_install].path);
-        fprintf(stderr, "picker: install requested: %s\n", g_tarballs[g_install].path);
+        fprintf(stderr, "nightfall: install requested: %s\n", g_tarballs[g_install].path);
         return 0;
     }
 
     if (g_selected < 0) {
-        fprintf(stderr, "picker: touch input ended with no selection\n");
+        fprintf(stderr, "nightfall: touch input ended with no selection\n");
         return 1;
     }
 
@@ -2340,7 +2340,7 @@ int main(int argc, char **argv) {
     if (g_set_default) shell_quote(stdout, "SET_DEFAULT", "1");
     if (g_setcl_set) shell_quote(stdout, "SET_CMDLINE", g_setcl);
     shell_quote(stdout, "SELECTED_BY", g_selected_by_timeout ? "timeout" : "user");
-    fprintf(stderr, "picker: selection made by %s\n",
+    fprintf(stderr, "nightfall: selection made by %s\n",
             g_selected_by_timeout ? "TIMEOUT (nothing was tapped)" : "user tap");
     return 0;
 }
