@@ -8,6 +8,13 @@
 #   bash initramfs/test-init.sh
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
+# Absolute, because the busybox pass below re-runs this file. As bare
+# "$0" that only worked when $0 happened to contain a slash: run as
+# "bash test-init.sh" from this directory it became a PATH lookup, which
+# failed - and the failure was a line of noise after "passed: 51", so it
+# read as a clean run while silently skipping the busybox half. That
+# half is the one that matters, since init runs under busybox for real.
+SELF=$REPO/initramfs/$(basename "$0")
 pass=0; fail=0
 ok()  { printf '  \033[32m[ok]\033[0m %s\n' "$*"; pass=$((pass+1)); }
 bad() { printf '  \033[31m[FAIL]\033[0m %s\n' "$*"; fail=$((fail+1)); }
@@ -93,6 +100,19 @@ printf 'Ubuntu old\t/boot/vmlinuz-old\t/boot/initrd.img-old\tro quiet\t\n'
 EOF
   printf '#!/bin/sh\ncat "$1"\n' > "$SB/bin/apply-default.sh"
   printf '#!/bin/sh\nprintf "%s\\tv1\\t120M\\n" /home/bob/k-installer.tar.gz\n' > "$SB/bin/discover-tarballs.sh"
+  # Counts its runs, so a refresh that fails to re-scan is visible.
+  # Without this mock the call just fails and is swallowed, which looks
+  # identical to it never being made.
+  cat > "$SB/bin/scan-drives.sh" <<'EOF'
+#!/bin/sh
+n=$(cat "$SB/scanruns" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$SB/scanruns"
+echo "MARKER_SCAN_RAN $n" >&2
+printf '/dev/sdx1\texfat\tVentoy\t931G\t21G\n' > "$3"
+# The backup list shrinks on the second scan: that is what deleting a
+# backup looks like from init's side.
+[ "$n" = 1 ] && printf '/dev/sdx1\tbk-old\tmonday\t86G\n' > "$4" || : > "$4"
+exit 0
+EOF
   # Marks the cmdline so the test can see init used this script's output.
   # awk, not sed: sed is not a busybox applet in the image, so a sed
   # mock silently fails under STRICT_BB and the assertion blames init.
@@ -145,6 +165,18 @@ EOF
 #!/bin/sh
 n=$(cat /tmp/pickruns 2>/dev/null || echo 0); n=$((n+1)); echo $n > /tmp/pickruns
 if [ "$n" = 1 ]; then echo "INSTALL_TARBALL=/home/bob/k-installer.tar.gz"
+else echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'; echo 'SELECTED_INITRD=x'; echo 'SELECTED_CMDLINE=y'; fi
+exit 0
+EOF
+    ;;
+    # Asks to reload more times than the INSTALL leash allows. Deleting
+    # several backups in a row is the normal way to free space on a full
+    # drive, and each "Back to menu" is one reload - sharing the install
+    # counter meant the fourth tap silently booted instead.
+    manyreloads) cat > "$SB/bin/nightfall" <<'EOF'
+#!/bin/sh
+n=$(cat /tmp/pickruns 2>/dev/null || echo 0); n=$((n+1)); echo $n > /tmp/pickruns
+if [ "$n" -le 6 ]; then echo "RELOAD=1"
 else echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'; echo 'SELECTED_INITRD=x'; echo 'SELECTED_CMDLINE=y'; fi
 exit 0
 EOF
@@ -328,6 +360,25 @@ rm -f /tmp/pickruns; setup rel reload 0 0; run
 both | grep -q "MARKER_INSTALL_RAN"          && bad "installed AGAIN - RELOAD must not re-install" || ok "does NOT re-install (RELOAD is not INSTALL_TARBALL)"
 log  | grep -q "reloading the menu"          && ok "refreshes the kernel list" || bad "no refresh recorded"
 both | grep -q "MARKER_KEXEC.*vmlinuz-chosen" && ok "boots the choice from the refreshed menu" || bad "did not boot"
+# Taking or deleting a backup changes the drive lists exactly the way
+# installing a kernel changes the kernel list. Coming back to a menu
+# that still lists the backup you just deleted looks precisely like the
+# delete having done nothing.
+[ "$(cat "$SB/scanruns" 2>/dev/null || echo 0)" -ge 2 ] \
+  && ok "re-scans the drives on refresh, not just the kernels" \
+  || bad "drive lists left stale after a reload"
+[ -s "$SB/run/nightfall/backups.tsv" ] \
+  && bad "backups.tsv still lists the deleted backup" \
+  || ok "the refreshed backup list reflects the deletion"
+
+echo "=== 11. several reloads in a row still return to the menu ==="
+rm -f /tmp/pickruns; setup rel manyreloads 0 0; run
+# Six reloads, which is past the install leash of three.
+both | grep -q "MARKER_KEXEC.*vmlinuz-chosen" \
+  && ok "still reaches the menu choice after 6 reloads" \
+  || bad "gave up and booted early: $(log | grep -i 'too many' | head -1)"
+log | grep -q "too many reloads" && bad "hit the install leash on plain reloads" \
+  || ok "does not treat reloads as install rounds"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"
@@ -342,7 +393,7 @@ if [ -z "${USE_BUSYBOX:-}" ]; then
   if command -v busybox >/dev/null 2>&1; then
     echo
     USE_BUSYBOX=1 STRICT_BB=1 MODE_NAME="busybox (host PATH removed)" \
-      TEST_SH="$(command -v busybox) sh" "$0" "$@"
+      TEST_SH="$(command -v busybox) sh" bash "$SELF" "$@"
   else
     echo
     echo "NOTE: busybox not installed - skipped the busybox pass, which is"

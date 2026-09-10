@@ -293,6 +293,13 @@ refresh_menu() {
         default_cmdline=$(printf '%s' "$default_line" | cut -f4)
     fi
     /bin/discover-tarballs.sh /mnt/root > /run/nightfall/tarballs.tsv 2>/dev/null || :
+    # The drive lists go stale for the same reason the kernel list does:
+    # taking a backup adds one, deleting a backup removes one, and
+    # coming back to a menu that still lists what you just deleted looks
+    # exactly like the delete having done nothing. Nightfall never
+    # mounts anything itself, so this has to happen out here.
+    /bin/scan-drives.sh "$REAL_ROOT_DEV" /mnt/root \
+        /run/nightfall/targets.tsv /run/nightfall/backups.tsv 2>/dev/null || :
 }
 
 # Installing a kernel returns to the menu rather than booting, so the
@@ -302,6 +309,16 @@ refresh_menu() {
 # re-requesting itself must not become a boot loop: after this many
 # rounds we stop offering and just boot something.
 install_rounds=0
+# Counted separately from install_rounds, because the two are bounded
+# for different reasons. An install can re-request itself with nobody
+# present, so three is a deliberately tight leash. A reload only ever
+# happens because someone tapped "Back to menu" on the finished screen,
+# and doing several backup deletions in a row is the normal way to free
+# space on a full drive - sharing the install leash meant the fourth tap
+# silently booted instead of returning to the menu. Still bounded, since
+# a Nightfall that crashed instantly and kept asking to reload must not
+# become a boot loop either.
+reload_rounds=0
 while :; do
 stage "running nightfall"
 if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_FILE" \
@@ -321,9 +338,9 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
     # Deliberately a different key from INSTALL_TARBALL: treating them
     # the same would install the same tarball a second time.
     if [ -n "$RELOAD" ]; then
-        install_rounds=$((install_rounds + 1))
-        if [ "$install_rounds" -le 3 ]; then
-            stage "reloading the menu after an in-Nightfall install"
+        reload_rounds=$((reload_rounds + 1))
+        if [ "$reload_rounds" -le "${NIGHTFALL_MAX_RELOADS:-12}" ]; then
+            stage "reloading the menu after work done inside Nightfall"
             refresh_menu
             continue
         fi
