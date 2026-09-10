@@ -122,10 +122,12 @@ And the same thing on the actual hardware, unretouched:
 <img src="docs/screenshots/on-hardware-confirm.jpg" width="31%"> <img src="docs/screenshots/on-hardware-edit.jpg" width="31%">
 
 *Phone photos from the night the whole boot chain first worked end to end.
-These predate the menu restructure and the button-spacing fix, so the flat
-kernel list and edge-to-edge buttons are how it looked then.*
+These predate the menu restructure, the button-spacing fix and the rename, so
+the flat kernel list, the edge-to-edge buttons and the old "Boot picker"
+heading are all how it looked then. They are photographs, so they stay as
+shot - the renders above are the current UI.*
 
-`picker` can also capture itself on the device
+`nightfall` can also capture itself on the device
 (`NIGHTFALL_SCREENSHOT_DIR=/path ./nightfall menu.tsv`), correctly un-rotated
 regardless of panel orientation — see [`ui/README.md`](ui/README.md#screenshots).
 
