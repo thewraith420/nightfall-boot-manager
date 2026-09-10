@@ -50,6 +50,48 @@ mounted=1
 
 mkdir -p "$root/mnt/$BACKUP_DIR" || die "could not create $BACKUP_DIR on the target"
 
+# ------------------------------------------------------- sweep partials
+# A backup that never finished leaves a .tar with no .info sidecar, and
+# discover-backups.sh deliberately hides those - restoring a truncated
+# archive would half-overwrite the system and stop. The consequence is
+# that a failed run strands tens of gigabytes the tablet cannot see and
+# therefore cannot delete.
+#
+# The failure paths this script can observe clean up after themselves
+# (see the tar failure below). This sweep is for the one that cannot:
+# power loss mid-backup, where by definition no cleanup code runs. So
+# something later has to notice, and this is the right later - it is
+# already mounted read-write, and freeing space is exactly what the
+# caller wants right now.
+#
+# Placed BEFORE the space check on purpose: a stranded partial must not
+# be the reason the next backup is refused for lack of room.
+#
+# Confined to $BACKUP_DIR, which this script creates and owns. Only one
+# backup can run at a time from the picker, and this runs before our own
+# archive is created, so it can never sweep a run in progress.
+sweep_partials() {
+    _d=$root/mnt/$BACKUP_DIR
+    for _t in "$_d"/*.tar; do
+        [ -f "$_t" ] || continue
+        [ -f "${_t%.tar}.info" ] && continue
+        _k=$(ls -l "$_t" 2>/dev/null | awk '{print int($5/1024)}')
+        if rm -f "$_t" 2>/dev/null; then
+            say "swept a partial backup that never finished: ${_t##*/} (${_k:-0}KB reclaimed)"
+        else
+            say "WARNING: could not remove the partial ${_t##*/}"
+        fi
+    done
+    # The mirror image: a sidecar whose archive is gone. Harmless and
+    # tiny, but it is equally invisible, so clear it while we are here.
+    for _i in "$_d"/*.info; do
+        [ -f "$_i" ] || continue
+        [ -f "${_i%.info}.tar" ] && continue
+        rm -f "$_i" 2>/dev/null && say "swept a stray sidecar with no archive: ${_i##*/}"
+    done
+}
+sweep_partials
+
 # ------------------------------------------------------------ space check
 # Uncompressed tar, so the archive is about the size of what is in use.
 # Checked BEFORE starting, because discovering it 70GB in wastes twenty
@@ -89,6 +131,25 @@ archive=/mnt/$BACKUP_DIR/$name.tar
 # Pseudo-filesystems and volatile state. /mnt is the target itself.
 # Everything else is faithful, including /home and /var - a restore
 # should put the machine back, not approximately back.
+#
+# /timeshift is the one judged exclusion, and it is a big one: on this
+# machine it was 30.5GB of an 86GB archive, 414,270 members, larger than
+# /home. It is Timeshift's own snapshot store, so including it means
+# backing up a backup - and a useless one for the case this archive
+# exists to cover, because those snapshots live on the same disk. In any
+# situation where you need this tar, they are either fine (so you did
+# not need it) or gone with the disk (so the copies inside are redundant
+# with the restore you just did). Two independent backups at ~55GB are
+# worth more than one 86GB snapshot-of-a-snapshot.
+#
+# Harmless if Timeshift is not installed: a pattern matching nothing is
+# silently ignored.
+#
+# NOTE, and it is the real gap in this archive: /boot/efi is the ESP, a
+# separate FAT partition that the picker does not mount, so it lands in
+# the tar as an EMPTY DIRECTORY. Everything on it (shimx64.efi,
+# grubx64.efi, the stub grub.cfg) is reproducible with grub-install from
+# packages that ARE in here, but a restore alone will not put it back.
 # Machine-readable, for picker's progress display. tar's own checkpoint
 # lines count RECORDS, which is not a unit anyone thinks in - knowing the
 # total lets the UI turn them into "50 GB of 86 GB" instead.
@@ -101,8 +162,28 @@ chroot "$root" "$TAR" \
     --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run \
     --exclude=/tmp --exclude=/mnt --exclude=/media --exclude=/lost+found \
     --exclude=/swapfile --exclude=/swap.img \
+    --exclude=/timeshift \
     -cf "$archive" / \
-    || die "tar failed - the archive on the target is incomplete and should not be trusted"
+    || tar_rc=$?
+if [ "${tar_rc:-0}" != 0 ]; then
+    # Delete the half-written archive rather than leaving it. It cannot
+    # be restored from, and without a sidecar it is invisible to
+    # discover-backups.sh - so leaving it behind strands its space with
+    # no way to reclaim it from the tablet. The sweep above is the
+    # backstop for power loss; this is the case we can actually see, so
+    # handle it here and immediately.
+    #
+    # $archive is a path inside the chroot; from out here it needs the
+    # $root prefix. Getting that wrong would silently delete nothing.
+    partial=$root/mnt/$BACKUP_DIR/$name.tar
+    if [ -f "$partial" ]; then
+        pk=$(ls -l "$partial" 2>/dev/null | awk '{print int($5/1024)}')
+        rm -f "$partial" 2>/dev/null \
+            && say "removed the incomplete archive (${pk:-0}KB reclaimed)" \
+            || say "WARNING: could not remove the incomplete archive $BACKUP_DIR/$name.tar"
+    fi
+    die "tar failed - the archive was incomplete, so it has been deleted rather than left looking real"
+fi
 
 # A backup you cannot identify later is barely a backup.
 {

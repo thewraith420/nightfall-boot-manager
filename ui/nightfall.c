@@ -1557,6 +1557,25 @@ static int start_restore(int idx) {
                        "Writes over the running system. Do not power off.");
 }
 
+static const char *remove_backup_script(void) {
+    const char *s = getenv("NIGHTFALL_REMOVE_BACKUP_SH");
+    return s ? s : "/bin/remove-backup.sh";
+}
+
+static int start_remove_backup(int idx) {
+    g_child_what = "Delete";
+    g_child_ok_msg  = "Deleted. The space is free on the drive.";
+    /* Deliberately not "nothing changed": the archive is deleted before
+     * anything else can fail, so a failure here still means it is gone.
+     * Same lesson the kernel removal screen learned - a reassuring
+     * message that is false points diagnosis the wrong way. */
+    g_child_bad_msg = "Failed - see the output above. The backup may be partly deleted.";
+    return start_child(remove_backup_script(), g_backups[idx].target, g_backups[idx].name,
+                       LV_SYMBOL_TRASH "  Deleting",
+                       g_backups[idx].name,
+                       "Deletes the archive from the drive. This machine is not touched.");
+}
+
 /* A plain two-button confirm. The install and remove dialogs predate it
  * and carry extra wording of their own; these two are simple enough to
  * share one. */
@@ -1631,6 +1650,35 @@ static void restore_click_cb(lv_event_t *e) {
              g_backups[idx].name, g_backups[idx].when, g_backups[idx].size);
     simple_confirm(idx, "Restore this backup?", body, "Restore", restore_confirm_cb, 1);
     screenshot_soon("restore-dialog");
+}
+
+static void delete_backup_confirm_cb(lv_event_t *e) {
+    lv_obj_t *mbox = lv_event_get_user_data(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(mbox);
+    lv_msgbox_close_async(mbox);
+    start_remove_backup(idx);
+}
+
+static void delete_backup_click_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    char body[600];
+    /* Being down to one backup is worth saying out loud, but it is not
+     * worth refusing over - see the header of remove-backup.sh. Freeing
+     * the space to take a fresh one is a normal thing to want, and on a
+     * full drive it is the only way to do it. */
+    snprintf(body, sizeof(body),
+             "%.60s\n%.60s  (%.16s)\n\n"
+             "Deletes this archive from the drive, freeing %.16s. "
+             "Nothing on this machine is touched.\n\n"
+             "%s",
+             g_backups[idx].name, g_backups[idx].when, g_backups[idx].size,
+             g_backups[idx].size,
+             g_backup_n == 1
+                 ? "This is your only backup. There will be none left."
+                 : "This cannot be undone.");
+    simple_confirm(idx, "Delete this backup?", body, "Delete",
+                   delete_backup_confirm_cb, 1);
+    screenshot_soon("delete-backup-dialog");
 }
 
 static void remove_click_cb(lv_event_t *e) {
@@ -1740,6 +1788,7 @@ static void show_backup_menu(void);
 static void show_backup_targets(void);
 static void rescan_cb(lv_event_t *e);
 static void show_restore_list(void);
+static void show_delete_backup_list(void);
 
 static lv_obj_t *make_row_h(const char *icon, const char *text, int dimmed, int h) {
     lv_obj_t *btn = lv_button_create(g_list);
@@ -1837,6 +1886,17 @@ static void show_backup_menu(void) {
     b = make_row(LV_SYMBOL_UPLOAD, buf, g_backup_n == 0);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_restore_list);
 
+    /* Last, and after Restore: two 86GB archives fill a 1TB stick, and
+     * with no keyboard there is no other way to clear one. Reaching for
+     * Delete when you meant Restore would be an expensive slip, so it
+     * does not sit above the thing it could be mistaken for. */
+    /* Same phrasing as Restore above: the count is of backups, not of
+     * drives, and pluralising "drive" on the backup count read as "2 on
+     * the drives" for two backups on one stick. */
+    snprintf(buf, sizeof(buf), "Delete a backup   (%d available)", g_backup_n);
+    b = make_row(LV_SYMBOL_TRASH, buf, g_backup_n == 0);
+    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_delete_backup_list);
+
     if (g_target_n == 0) {
         lv_obj_t *l = lv_label_create(g_list);
         lv_label_set_text(l, "No external drive found.\n\n"
@@ -1882,6 +1942,34 @@ static void show_restore_list(void) {
                  g_backups[i].name, g_backups[i].when, g_backups[i].size);
         lv_obj_t *b = make_row(LV_SYMBOL_UPLOAD, row, 0);
         lv_obj_add_event_cb(b, restore_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+}
+
+static void show_delete_backup_list(void) {
+    lv_obj_clean(g_list);
+    lv_label_set_text(g_header, LV_SYMBOL_TRASH "  Delete a backup");
+    add_back_row(show_backup_menu);
+
+    if (g_backup_n == 0) {
+        lv_obj_t *l = lv_label_create(g_list);
+        /* The second paragraph is the honest answer to "the drive is
+         * full but this list is empty". A run that died part way leaves
+         * an archive with no sidecar, which is hidden everywhere on
+         * purpose - so say where it goes instead of leaving someone
+         * hunting for a delete button that will never appear. */
+        lv_label_set_text(l, "No backups found on the attached drives.\n\n"
+                             "A backup that stopped part way is not listed\n"
+                             "here. Those are cleared automatically the next\n"
+                             "time you take a backup.");
+        lv_obj_set_style_text_color(l, lv_color_hex(0x93a0aa), 0);
+        return;
+    }
+    for (int i = 0; i < g_backup_n; i++) {
+        char row[240];
+        snprintf(row, sizeof(row), "%.40s   %.30s   %.10s",
+                 g_backups[i].name, g_backups[i].when, g_backups[i].size);
+        lv_obj_t *b = make_row(LV_SYMBOL_TRASH, row, 0);
+        lv_obj_add_event_cb(b, delete_backup_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
 }
 

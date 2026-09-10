@@ -166,6 +166,27 @@ int main(void) {
         ck(strstr(g_prog_lines[0], "target=/dev/sda1") != NULL, "passes the drive as argument 2");
         ck(strstr(g_prog_lines[0], "name=nightfall-backup-20260909-1200") != NULL,
            "passes the archive name as argument 3");
+        /* --- deleting a backup takes the same two arguments --- */
+        /* Restore and delete have identical signatures and adjacent
+         * rows in the same menu, so a swapped or shifted argument would
+         * still "work" right up to deleting the wrong 86GB archive. */
+        setenv("NIGHTFALL_REMOVE_BACKUP_SH", "/nonexistent", 1);
+        ck(start_remove_backup(0) == -1,
+           "delete falls back cleanly when its script is missing");
+
+        FILE *df = fopen("/tmp/mock-rmbackup.sh", "w");
+        fprintf(df, "#!/bin/sh\necho \"remove-backup: root=$1 target=$2 name=$3\"\nexit 0\n");
+        fclose(df); chmod("/tmp/mock-rmbackup.sh", 0755);
+        setenv("NIGHTFALL_REMOVE_BACKUP_SH", "/tmp/mock-rmbackup.sh", 1);
+        g_prog_n = 0;
+        ck(start_remove_backup(0) == 0, "starts the delete child");
+        ck(drain() == 1, "reports success");
+        ck(strstr(g_prog_lines[0], "target=/dev/sda1") != NULL,
+           "passes the drive as argument 2");
+        ck(strstr(g_prog_lines[0], "name=nightfall-backup-20260909-1200") != NULL,
+           "passes the archive name as argument 3, not the drive");
+        remove("/tmp/mock-rmbackup.sh");
+
         remove("/tmp/mock-restore.sh"); remove("/tmp/mock-targets"); remove("/tmp/mock-backups");
         g_targets = NULL; g_target_n = 0; g_backups = NULL; g_backup_n = 0;
     }
