@@ -65,6 +65,30 @@ info=$root/mnt/$BACKUP_DIR/$name.info
 say "restoring $BACKUP_DIR/$name.tar"
 cat "$info" >&2 2>/dev/null || true
 
+# ------------------------------------- keep this machine's own fstab
+# Captured BEFORE the extract overwrites it, because it is the one piece
+# of the target that is known-good for THIS hardware: the machine booted
+# off it, which is proof enough.
+#
+# Restoring the Slate onto itself, the archive's fstab is identical and
+# none of this does anything. It matters for the recovery path this
+# project actually promises - install a distro, install Nightfall,
+# restore - where the new filesystem has a different UUID. The archive's
+# fstab then names a disk that is not in the machine, and the system
+# boots into an emergency shell hunting for it. update-grub below fixes
+# grub.cfg (grub-probe resolves the real device), so fstab is the one
+# thing left pointing at the wrong hardware.
+target_fstab=
+[ -f "$root/etc/fstab" ] && target_fstab=$(cat "$root/etc/fstab" 2>/dev/null || true)
+# The device actually mounted at $root. No findmnt or lsblk in here, so
+# read it out of /proc/mounts.
+# NIGHTFALL_MOUNTS is a test seam and nothing else - the real thing is
+# always /proc/mounts. Without it this block cannot be exercised at all,
+# since a test's fake root is not a real mount.
+root_dev=$(awk -v m="$root" '$2 == m { print $1; exit }' \
+    "${NIGHTFALL_MOUNTS:-/proc/mounts}" 2>/dev/null || true)
+[ -n "$root_dev" ] && say "restoring onto $root_dev"
+
 # --------------------------------------------- prove the chroot first
 # Same ordering lesson remove-kernel.sh learned the hard way: do the
 # fallible setup and prove it works BEFORE the irreversible step. Here
@@ -104,6 +128,31 @@ chroot "$root" "$TAR" \
     || die "extract failed - the system is now a mix of restored and original files; re-run the restore, or boot a live image from the same drive"
 
 sync
+
+# --------------------------------- does the restored fstab fit this disk?
+# Ask the restored system's own blkid for the UUID of the disk we just
+# restored onto, then check the restored fstab actually names it. If it
+# does not, that backup came from different hardware and mounting / would
+# fail at boot - so put back the fstab this machine was using, and leave
+# the archive's alongside rather than discarding it.
+#
+# Deliberately conservative: if the UUID cannot be determined, or the
+# restored fstab does name this disk, nothing is touched. A wrong guess
+# here would break a restore that was about to work.
+if [ -n "$root_dev" ] && [ -n "$target_fstab" ]; then
+    root_uuid=$(chroot "$root" /sbin/blkid -s UUID -o value "$root_dev" 2>/dev/null || true)
+    if [ -z "$root_uuid" ]; then
+        say "could not read the UUID of $root_dev - leaving /etc/fstab exactly as restored"
+    elif grep -q "$root_uuid" "$root/etc/fstab" 2>/dev/null; then
+        say "restored /etc/fstab names this disk ($root_uuid) - leaving it alone"
+    else
+        say "the restored /etc/fstab does NOT name this disk ($root_uuid)"
+        say "that backup was taken on different hardware - keeping this machine's fstab"
+        say "the archive's version is saved as /etc/fstab.from-backup"
+        cp "$root/etc/fstab" "$root/etc/fstab.from-backup" 2>/dev/null || true
+        printf '%s\n' "$target_fstab" > "$root/etc/fstab"
+    fi
+fi
 
 # ------------------------------------------------- reconcile the menu
 # The restored grub.cfg describes the kernels that existed when the

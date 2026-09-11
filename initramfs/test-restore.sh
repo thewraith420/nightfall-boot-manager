@@ -22,18 +22,31 @@ setup() {
   printf '#!/bin/sh\nexit 0\n' > "$SB/bin/mount"
   printf '#!/bin/sh\nexit 0\n' > "$SB/bin/umount"
   printf '#!/bin/sh\nexit 0\n' > "$SB/bin/sync"
+  # The target's own fstab, as it is before a restore overwrites it.
+  mkdir -p "$SB/root/etc"
+  echo "UUID=TARGET-UUID / ext4 defaults 0 1" > "$SB/root/etc/fstab"
+  # What /proc/mounts would say: this device is mounted at the fake root.
+  echo "/dev/fake-root $SB/root ext4 rw 0 0" > "$SB/mounts"
   cat > "$SB/bin/chroot" <<EOF
 #!/bin/sh
 case "\$*" in
   *grub-probe*)  exit $2 ;;
-  *tar*)         echo "MARKER_EXTRACT \$*" >&2; exit $3 ;;
+  *blkid*)       echo "\${BLKID_UUID-TARGET-UUID}"; exit \${BLKID_RC-0} ;;
+  # A real extract replaces /etc/fstab with the ARCHIVE's copy. Without
+  # modelling that, every fstab assertion below would pass against a
+  # script that does nothing at all.
+  *tar*)         echo "MARKER_EXTRACT \$*" >&2
+                 echo "UUID=ARCHIVE-UUID / ext4 defaults 0 1" > "$SB/root/etc/fstab"
+                 exit $3 ;;
   *update-grub*) echo "MARKER_UPDATE_GRUB" >&2; exit 0 ;;
 esac
 exit 0
 EOF
   chmod +x "$SB"/bin/*
 }
-run() { PATH="$SB/bin:$PATH" sh "$S" "$SB/root" "$SB/target" bk >"$SB/out" 2>&1; echo $?; }
+run() { PATH="$SB/bin:$PATH" NIGHTFALL_MOUNTS="$SB/mounts" \
+          sh "$S" "$SB/root" "$SB/target" bk >"$SB/out" 2>&1; echo $?; }
+fstab() { cat "$SB/root/etc/fstab" 2>/dev/null; }
 out() { cat "$SB/out"; }
 
 echo "=== refuses an incomplete backup ==="
@@ -77,6 +90,43 @@ rc=$(run)
 [ "$rc" != 0 ] && ok "propagates the failure" || bad "reported success after tar failed"
 out | grep -q "mix of restored and original" \
   && ok "says the system is in a mixed state, and what to do about it" || bad "no honest description of the state"
+
+echo "=== fstab: a backup from THIS machine is left alone ==="
+setup yes 0 0
+# blkid reports the UUID the ARCHIVE's fstab names, i.e. same hardware.
+export BLKID_UUID=ARCHIVE-UUID
+rc=$(run)
+[ "$rc" = 0 ] && ok "restores normally" || bad "failed: $(out | tail -2)"
+fstab | grep -q "ARCHIVE-UUID" && ok "keeps the restored fstab" || bad "clobbered a correct fstab"
+[ ! -f "$SB/root/etc/fstab.from-backup" ] && ok "no needless fstab.from-backup" || bad "saved a copy it did not need to"
+out | grep -q "names this disk" && ok "says it checked and it matched" || bad "silent about the check"
+unset BLKID_UUID
+
+echo "=== fstab: a backup from DIFFERENT hardware is corrected ==="
+# The recovery path this project promises: install a distro, install
+# Nightfall, restore. The new filesystem has a different UUID, so the
+# archive's fstab names a disk that is not in the machine.
+setup yes 0 0
+export BLKID_UUID=TARGET-UUID
+rc=$(run)
+[ "$rc" = 0 ] && ok "still restores" || bad "failed: $(out | tail -2)"
+fstab | grep -q "TARGET-UUID" \
+  && ok "puts back the fstab that matches the real disk" \
+  || bad "left an fstab naming hardware that is not here: $(fstab)"
+grep -q "ARCHIVE-UUID" "$SB/root/etc/fstab.from-backup" 2>/dev/null \
+  && ok "keeps the archive's fstab as fstab.from-backup" || bad "discarded the archive's fstab"
+out | grep -q "different hardware" && ok "explains why it swapped" || bad "swapped silently"
+unset BLKID_UUID
+
+echo "=== fstab: refuses to guess when it cannot tell ==="
+setup yes 0 0
+export BLKID_UUID=""; export BLKID_RC=2
+rc=$(run)
+[ "$rc" = 0 ] && ok "restore still succeeds" || bad "a blkid failure broke the restore"
+fstab | grep -q "ARCHIVE-UUID" \
+  && ok "leaves fstab exactly as restored rather than guessing" || bad "changed fstab on no evidence"
+out | grep -q "could not read the UUID" && ok "says it could not tell" || bad "silent"
+unset BLKID_UUID BLKID_RC
 
 echo
 echo "passed: $pass   failed: $fail"
