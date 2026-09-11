@@ -218,7 +218,12 @@ EOF
   # shadowing is the one interception that works in both builds.
   shadow=
   if [ -n "${USE_BUSYBOX:-}" ]; then
-    for a in mount dmesg mdev; do
+    # reboot and poweroff are applets too, so PATH mocks for them are
+    # bypassed exactly like mount's - which showed up as two failures on
+    # the Slate and none here, the same split that cost a debugging round
+    # the first time. Production WANTS the applet; only the test needs
+    # the shadow.
+    for a in mount dmesg mdev reboot poweroff; do
       shadow="$shadow$a() { \"$SB/bin/$a\" \"\$@\"; }
 "
     done
