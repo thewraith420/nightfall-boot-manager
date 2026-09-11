@@ -1395,6 +1395,7 @@ static int install_pump(char *buf, size_t bufsz, size_t *len)
 /* 0: child started, the UI takes over. -1: caller should fall back to
  * exiting and letting init do the work. */
 static int start_child(const char *script, const char *arg, const char *arg2,
+                       const char *arg3,
                        const char *heading, const char *subject,
                        const char *warning) {
     if (access(script, X_OK) != 0) return -1;
@@ -1410,10 +1411,12 @@ static int start_child(const char *script, const char *arg, const char *arg2,
         dup2(pfd[1], STDERR_FILENO);
         close(pfd[1]);
         const char *root = getenv("NIGHTFALL_ROOT");
-        if (arg2)
-            execl(script, script, root ? root : "/mnt/root", arg, arg2, (char *)NULL);
-        else
-            execl(script, script, root ? root : "/mnt/root", arg, (char *)NULL);
+        if (!root) root = "/mnt/root";
+        /* rename-backup.sh needs four: root, drive, old name, new name.
+         * Everything else stops at two or three. */
+        if (arg3)      execl(script, script, root, arg, arg2, arg3, (char *)NULL);
+        else if (arg2) execl(script, script, root, arg, arg2, (char *)NULL);
+        else           execl(script, script, root, arg, (char *)NULL);
         _exit(127);
     }
     close(pfd[1]);
@@ -1427,7 +1430,7 @@ static int start_install(int idx) {
     g_child_what = "Install";
     g_child_ok_msg  = "Installed. It will appear in the kernel list.";
     g_child_bad_msg = "Failed - nothing was removed, existing kernels still boot.";
-    return start_child(install_script(), g_tarballs[idx].path, NULL,
+    return start_child(install_script(), g_tarballs[idx].path, NULL, NULL,
                        LV_SYMBOL_DOWNLOAD "  Installing",
                        g_tarballs[idx].version,
                        "This takes several minutes. Do not power off.");
@@ -1440,7 +1443,7 @@ static int start_remove(int idx) {
      * are already gone. Claiming otherwise sent me looking in the wrong
      * place on the first real failure. */
     g_child_bad_msg = "Failed - see the output above before rebooting.";
-    return start_child(remove_script(), g_kernels[idx].release, NULL,
+    return start_child(remove_script(), g_kernels[idx].release, NULL, NULL,
                        LV_SYMBOL_TRASH "  Removing",
                        g_kernels[idx].release,
                        "Deleting the kernel, its modules and its menu entries.");
@@ -1591,7 +1594,7 @@ static int start_backup(int idx) {
     g_child_ok_msg  = "Backed up. The archive is on the drive.";
     g_child_bad_msg = "Failed - see the output above. Nothing on this machine changed.";
     return start_child(backup_script(), g_targets[idx].dev,
-                       g_backup_name[0] ? g_backup_name : NULL,
+                       g_backup_name[0] ? g_backup_name : NULL, NULL,
                        LV_SYMBOL_SAVE "  Backing up",
                        g_backup_name[0] ? g_backup_name
                                         : (g_targets[idx].label[0] ? g_targets[idx].label
@@ -1603,7 +1606,7 @@ static int start_restore(int idx) {
     g_child_what = "Restore";
     g_child_ok_msg  = "Restored. Reboot when you are ready.";
     g_child_bad_msg = "Failed - see the output above before rebooting.";
-    return start_child(restore_script(), g_backups[idx].target, g_backups[idx].name,
+    return start_child(restore_script(), g_backups[idx].target, g_backups[idx].name, NULL,
                        LV_SYMBOL_UPLOAD "  Restoring",
                        g_backups[idx].name,
                        "Writes over the running system. Do not power off.");
@@ -1622,10 +1625,34 @@ static int start_remove_backup(int idx) {
      * Same lesson the kernel removal screen learned - a reassuring
      * message that is false points diagnosis the wrong way. */
     g_child_bad_msg = "Failed - see the output above. The backup may be partly deleted.";
-    return start_child(remove_backup_script(), g_backups[idx].target, g_backups[idx].name,
+    return start_child(remove_backup_script(), g_backups[idx].target, g_backups[idx].name, NULL,
                        LV_SYMBOL_TRASH "  Deleting",
                        g_backups[idx].name,
                        "Deletes the archive from the drive. This machine is not touched.");
+}
+
+static const char *rename_backup_script(void) {
+    const char *s = getenv("NIGHTFALL_RENAME_BACKUP_SH");
+    return s ? s : "/bin/rename-backup.sh";
+}
+
+/* The name a rename is heading for. Filled in by the dialog just before
+ * the child starts, for the same reason g_backup_name exists: the
+ * script takes it as an argument, and picker never touches the drive. */
+static char g_rename_to[128];
+
+static int start_rename_backup(int idx) {
+    g_child_what = "Rename";
+    g_child_ok_msg  = "Renamed. The new name is on the drive.";
+    /* Not "nothing changed": the sidecar is written first, so a failure
+     * can leave a stray one behind. It is harmless - the next backup
+     * sweeps it - but claiming nothing happened would be false. */
+    g_child_bad_msg = "Failed - see the output above. The backup itself is intact.";
+    return start_child(rename_backup_script(), g_backups[idx].target,
+                       g_backups[idx].name, g_rename_to,
+                       LV_SYMBOL_EDIT "  Renaming",
+                       g_rename_to,
+                       "Renames the archive on the drive. This machine is not touched.");
 }
 
 /* A plain two-button confirm. The install and remove dialogs predate it
@@ -1709,6 +1736,74 @@ static void bkname_go_cb(lv_event_t *e) {
     sanitize_backup_name(typed ? typed : "", g_backup_name, sizeof(g_backup_name));
     bkname_close(ctx);
     start_backup(idx);
+}
+
+/* Renaming reuses the backup-naming dialog wholesale - same keyboard,
+ * same layering rules, same repaint fix. Only the title, the prefill and
+ * what happens on OK differ, so it is one more callback rather than a
+ * second copy of a dialog that took three rounds on hardware to get
+ * right. */
+static void rename_go_cb(lv_event_t *e) {
+    struct bkname_ctx *ctx = lv_event_get_user_data(e);
+    int idx = ctx->idx;
+    const char *typed = lv_textarea_get_text(ctx->ta);
+    sanitize_backup_name(typed ? typed : "", g_rename_to, sizeof(g_rename_to));
+    bkname_close(ctx);
+    start_rename_backup(idx);
+}
+
+static void rename_click_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+
+    struct bkname_ctx *ctx = malloc(sizeof(*ctx));
+    if (!ctx) return;
+    ctx->idx = idx;
+
+    ctx->mbox = lv_msgbox_create(NULL);
+    lv_obj_set_width(ctx->mbox, lv_pct(92));
+    lv_msgbox_add_title(ctx->mbox, "Rename this backup");
+
+    char body[400];
+    snprintf(body, sizeof(body), "%.60s  (%.16s)\n\nNew name:",
+             g_backups[idx].when, g_backups[idx].size);
+    lv_msgbox_add_text(ctx->mbox, body);
+
+    ctx->ta = lv_textarea_create(lv_msgbox_get_content(ctx->mbox));
+    lv_textarea_set_one_line(ctx->ta, true);
+    lv_obj_set_width(ctx->ta, lv_pct(100));
+    /* Prefilled with the CURRENT name, not blank: most renames are an
+     * edit of what is there, and it also shows what you are renaming. */
+    lv_textarea_set_text(ctx->ta, g_backups[idx].name);
+    lv_textarea_set_cursor_pos(ctx->ta, 0);
+
+    ctx->kb = lv_keyboard_create(lv_layer_top());
+    lv_obj_set_size(ctx->kb, lv_pct(100), lv_pct(KEYBOARD_PCT_H));
+    lv_obj_align(ctx->kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(ctx->kb, ctx->ta);
+
+    lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
+    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, 16);
+
+    lv_obj_t *go = lv_msgbox_add_footer_button(ctx->mbox, "Rename");
+    lv_obj_t *no = lv_msgbox_add_footer_button(ctx->mbox, "Cancel");
+    lv_obj_t *footer = lv_msgbox_get_footer(ctx->mbox);
+    lv_obj_set_height(footer, LV_SIZE_CONTENT);
+    lv_obj_set_height(lv_msgbox_get_header(ctx->mbox), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_column(footer, DIALOG_BTN_GAP, 0);
+    lv_obj_set_style_pad_row(footer, DIALOG_BTN_GAP, 0);
+    lv_obj_set_width(go, lv_pct(100));
+    lv_obj_set_width(no, lv_pct(100));
+    lv_obj_set_height(go, DIALOG_BTN_H);
+    lv_obj_set_height(no, DIALOG_BTN_H);
+    lv_obj_set_style_bg_color(go, lv_color_hex(0x3d7ee8), 0);
+    lv_obj_set_style_bg_opa(go, LV_OPA_30, 0);
+
+    lv_obj_add_event_cb(go, rename_go_cb, LV_EVENT_CLICKED, ctx);
+    lv_obj_add_event_cb(no, bkname_cancel_cb, LV_EVENT_CLICKED, ctx);
+
+    lv_obj_invalidate(lv_layer_top());
+    screenshot_soon("rename-dialog");
 }
 
 static void backup_click_cb(lv_event_t *e) {
@@ -1924,6 +2019,7 @@ static void show_backup_targets(void);
 static void rescan_cb(lv_event_t *e);
 static void show_restore_list(void);
 static void show_delete_backup_list(void);
+static void show_rename_backup_list(void);
 
 static lv_obj_t *make_row_h(const char *icon, const char *text, int dimmed, int h) {
     lv_obj_t *btn = lv_button_create(g_list);
@@ -2021,10 +2117,16 @@ static void show_backup_menu(void) {
     b = make_row(LV_SYMBOL_UPLOAD, buf, g_backup_n == 0);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_restore_list);
 
+    snprintf(buf, sizeof(buf), "Rename a backup   (%d available)", g_backup_n);
+    b = make_row(LV_SYMBOL_EDIT, buf, g_backup_n == 0);
+    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_rename_backup_list);
+
     /* Last, and after Restore: two 86GB archives fill a 1TB stick, and
      * with no keyboard there is no other way to clear one. Reaching for
      * Delete when you meant Restore would be an expensive slip, so it
-     * does not sit above the thing it could be mistaken for. */
+     * does not sit above the thing it could be mistaken for. Rename sits
+     * between them: it is the harmless one, and it keeps Delete from
+     * being adjacent to Restore. */
     /* Same phrasing as Restore above: the count is of backups, not of
      * drives, and pluralising "drive" on the backup count read as "2 on
      * the drives" for two backups on one stick. */
@@ -2077,6 +2179,28 @@ static void show_restore_list(void) {
                  g_backups[i].name, g_backups[i].when, g_backups[i].size);
         lv_obj_t *b = make_row(LV_SYMBOL_UPLOAD, row, 0);
         lv_obj_add_event_cb(b, restore_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+}
+
+static void show_rename_backup_list(void) {
+    lv_obj_clean(g_list);
+    lv_label_set_text(g_header, LV_SYMBOL_EDIT "  Rename a backup");
+    add_back_row(show_backup_menu);
+
+    if (g_backup_n == 0) {
+        lv_obj_t *l = lv_label_create(g_list);
+        lv_label_set_text(l, "No backups found on the attached drives.\n\n"
+                             "Tap Rescan on the previous screen if the\n"
+                             "drive was plugged in after Nightfall started.");
+        lv_obj_set_style_text_color(l, lv_color_hex(0x93a0aa), 0);
+        return;
+    }
+    for (int i = 0; i < g_backup_n; i++) {
+        char row[240];
+        snprintf(row, sizeof(row), "%.40s   %.30s   %.10s",
+                 g_backups[i].name, g_backups[i].when, g_backups[i].size);
+        lv_obj_t *b = make_row(LV_SYMBOL_EDIT, row, 0);
+        lv_obj_add_event_cb(b, rename_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
 }
 

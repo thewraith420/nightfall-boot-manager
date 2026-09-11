@@ -28,7 +28,7 @@ trap 'rm -rf "$staging"' EXIT
 # applet symlinks into the one busybox binary, so they cost no space.
 APPLETS="sh mount umount mkdir echo printf cut head awk cat ls
          sleep dmesg uname tail sync date wc grep
-         tar chroot tee rm df"
+         tar chroot tee rm df mv"
 
 say() { echo "==> $*"; }
 die() { echo "build-initramfs: $*" >&2; exit 1; }
@@ -57,6 +57,7 @@ for f in "$here/init" "$here/discover-kernels.sh" "$here/apply-default.sh" \
          "$here/remove-kernel.sh" "$here/apply-cmdline.sh" \
          "$here/discover-backup-targets.sh" "$here/backup-system.sh" \
          "$here/restore-system.sh" "$here/remove-backup.sh" \
+         "$here/rename-backup.sh" \
          "$here/discover-backups.sh" "$here/scan-drives.sh" \
          "$repo/boot-integration/kexec-boot.sh"; do
     [ -r "$f" ] || die "missing source file: $f"
@@ -97,6 +98,7 @@ install -m 0755 "$here/discover-backup-targets.sh"  "$staging/bin/discover-backu
 install -m 0755 "$here/backup-system.sh"            "$staging/bin/backup-system.sh"
 install -m 0755 "$here/restore-system.sh"           "$staging/bin/restore-system.sh"
 install -m 0755 "$here/remove-backup.sh"            "$staging/bin/remove-backup.sh"
+install -m 0755 "$here/rename-backup.sh"            "$staging/bin/rename-backup.sh"
 install -m 0755 "$here/discover-backups.sh"         "$staging/bin/discover-backups.sh"
 install -m 0755 "$here/scan-drives.sh"              "$staging/bin/scan-drives.sh"
 install -m 0755 "$repo/boot-integration/kexec-boot.sh" "$staging/sbin/kexec-boot.sh"

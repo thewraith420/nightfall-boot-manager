@@ -187,6 +187,31 @@ int main(void) {
            "passes the archive name as argument 3, not the drive");
         remove("/tmp/mock-rmbackup.sh");
 
+        /* --- rename takes FOUR arguments, not three --- */
+        /* The only child that does. start_child grew a third slot for
+         * it, so a silent regression there would send the new name as
+         * nothing and rename the backup to the empty string. */
+        setenv("NIGHTFALL_RENAME_BACKUP_SH", "/nonexistent", 1);
+        snprintf(g_rename_to, sizeof(g_rename_to), "before-the-update");
+        ck(start_rename_backup(0) == -1,
+           "rename falls back cleanly when its script is missing");
+
+        FILE *nf = fopen("/tmp/mock-rename.sh", "w");
+        fprintf(nf, "#!/bin/sh\necho \"rename: root=$1 target=$2 old=$3 new=$4\"\nexit 0\n");
+        fclose(nf); chmod("/tmp/mock-rename.sh", 0755);
+        setenv("NIGHTFALL_RENAME_BACKUP_SH", "/tmp/mock-rename.sh", 1);
+        g_prog_n = 0;
+        ck(start_rename_backup(0) == 0, "starts the rename child");
+        ck(drain() == 1, "reports success");
+        ck(strstr(g_prog_lines[0], "target=/dev/sda1") != NULL,
+           "drive as argument 2");
+        ck(strstr(g_prog_lines[0], "old=nightfall-backup-20260909-1200") != NULL,
+           "the CURRENT name as argument 3");
+        ck(strstr(g_prog_lines[0], "new=before-the-update") != NULL,
+           "the NEW name as argument 4 - the slot start_child grew for this");
+        remove("/tmp/mock-rename.sh");
+        g_rename_to[0] = '\0';
+
         remove("/tmp/mock-restore.sh"); remove("/tmp/mock-targets"); remove("/tmp/mock-backups");
         g_targets = NULL; g_target_n = 0; g_backups = NULL; g_backup_n = 0;
     }
