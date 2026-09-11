@@ -1537,13 +1537,65 @@ static const char *restore_script(void) {
     return s ? s : "/bin/restore-system.sh";
 }
 
+/* The name the next backup is written under. Empty means "let
+ * backup-system.sh generate one", which is what happened before this
+ * was nameable at all. */
+static char g_backup_name[128];
+
+/* Builds the default, which is also what the name box starts with. */
+static void default_backup_name(char *out, size_t n) {
+    time_t t = time(NULL);
+    struct tm tmv;
+    if (localtime_r(&t, &tmv))
+        strftime(out, n, "nightfall-backup-%Y%m%d-%H%M", &tmv);
+    else
+        snprintf(out, n, "nightfall-backup-manual");
+}
+
+/* A backup name becomes a filename on a drive that other machines will
+ * read, so keep it to characters that mean the same thing everywhere:
+ * exFAT, ext4, and a shell that will later pass it to tar.
+ *
+ * Anything else becomes '-' rather than being dropped, so a name stays
+ * roughly the length the person typed and two different names cannot
+ * silently collapse into one. A '/' would escape the backup directory
+ * entirely - backup-system.sh refuses that too, but it should never get
+ * that far. */
+static void sanitize_backup_name(const char *in, char *out, size_t n) {
+    size_t o = 0;
+    int prev_dash = 0;
+    for (const char *p = in; *p && o + 1 < n; p++) {
+        char c = *p;
+        int keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                   (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+        if (!keep) c = '-';
+        /* Collapse runs, and never lead with a dash or dot: a leading
+         * dash reads as an option to anything later, and a leading dot
+         * hides the archive from a plain ls. */
+        if (c == '-') {
+            if (prev_dash || o == 0) continue;
+            prev_dash = 1;
+        } else {
+            prev_dash = 0;
+        }
+        if (o == 0 && c == '.') continue;
+        out[o++] = c;
+    }
+    while (o > 0 && out[o - 1] == '-') o--;   /* no trailing dash either */
+    out[o] = '\0';
+    if (o == 0) default_backup_name(out, n);  /* all punctuation, or empty */
+}
+
 static int start_backup(int idx) {
     g_child_what = "Backup";
     g_child_ok_msg  = "Backed up. The archive is on the drive.";
     g_child_bad_msg = "Failed - see the output above. Nothing on this machine changed.";
-    return start_child(backup_script(), g_targets[idx].dev, NULL,
+    return start_child(backup_script(), g_targets[idx].dev,
+                       g_backup_name[0] ? g_backup_name : NULL,
                        LV_SYMBOL_SAVE "  Backing up",
-                       g_targets[idx].label[0] ? g_targets[idx].label : g_targets[idx].dev,
+                       g_backup_name[0] ? g_backup_name
+                                        : (g_targets[idx].label[0] ? g_targets[idx].label
+                                                                   : g_targets[idx].dev),
                        "Reads the whole system. Minutes, not seconds. Do not unplug the drive.");
 }
 
@@ -1609,12 +1661,9 @@ static lv_obj_t *simple_confirm(int idx, const char *title, const char *body,
     return mbox;
 }
 
-static void backup_confirm_cb(lv_event_t *e) {
-    lv_obj_t *mbox = lv_event_get_user_data(e);
-    int idx = (int)(intptr_t)lv_obj_get_user_data(mbox);
-    lv_msgbox_close_async(mbox);
-    start_backup(idx);
-}
+/* Backup has no simple_confirm callback: its confirm step is the name
+ * dialog (backup_click_cb), which does the same job and collects a name
+ * on the way through. */
 
 static void restore_confirm_cb(lv_event_t *e) {
     lv_obj_t *mbox = lv_event_get_user_data(e);
@@ -1623,18 +1672,104 @@ static void restore_confirm_cb(lv_event_t *e) {
     start_restore(idx);
 }
 
+/* Naming a backup, which is also the confirm step.
+ *
+ * Deliberately one dialog rather than confirm-then-name: every backup
+ * gets a name whether or not you care, so the box arrives pre-filled
+ * with the generated one and tapping straight through behaves exactly
+ * as it did before names existed. Only someone who wants a name pays
+ * for the keyboard.
+ *
+ * Same structure as the Edit dialog, for the same hard-won reasons -
+ * see edit_cb: the keyboard is a later SIBLING on lv_layer_top(), the
+ * dialog is pinned to the top because the keyboard owns the bottom
+ * 45%, and lv_layer_top() is invalidated at the end or the textarea
+ * comes up blank until the first keystroke. */
+struct bkname_ctx {
+    int idx;
+    lv_obj_t *mbox;
+    lv_obj_t *kb;
+    lv_obj_t *ta;
+};
+
+static void bkname_close(struct bkname_ctx *ctx) {
+    lv_obj_delete_async(ctx->kb);
+    lv_msgbox_close_async(ctx->mbox);
+    free(ctx);
+}
+
+static void bkname_cancel_cb(lv_event_t *e) {
+    bkname_close(lv_event_get_user_data(e));
+}
+
+static void bkname_go_cb(lv_event_t *e) {
+    struct bkname_ctx *ctx = lv_event_get_user_data(e);
+    int idx = ctx->idx;                      /* ctx is freed below */
+    const char *typed = lv_textarea_get_text(ctx->ta);
+    sanitize_backup_name(typed ? typed : "", g_backup_name, sizeof(g_backup_name));
+    bkname_close(ctx);
+    start_backup(idx);
+}
+
 static void backup_click_cb(lv_event_t *e) {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
+
+    struct bkname_ctx *ctx = malloc(sizeof(*ctx));
+    if (!ctx) return;
+    ctx->idx = idx;
+
+    ctx->mbox = lv_msgbox_create(NULL);
+    lv_obj_set_width(ctx->mbox, lv_pct(92));
+    lv_msgbox_add_title(ctx->mbox, "Back up to this drive?");
+
     char body[500];
     snprintf(body, sizeof(body),
              "%.60s  (%.20s, %.20s free)\n\n"
-             "Copies the whole system to this drive as one archive.\n\n"
              "The system is read-only while this runs, so nothing is "
-             "changing underneath it - that is why this is worth doing "
-             "from here rather than from a running desktop.",
+             "changing underneath it.\n\nName this backup:",
              g_targets[idx].label[0] ? g_targets[idx].label : g_targets[idx].dev,
              g_targets[idx].fstype, g_targets[idx].freespace);
-    simple_confirm(idx, "Back up to this drive?", body, "Back up", backup_confirm_cb, 0);
+    lv_msgbox_add_text(ctx->mbox, body);
+
+    ctx->ta = lv_textarea_create(lv_msgbox_get_content(ctx->mbox));
+    /* one_line IS right here, unlike the cmdline editor: a name is
+     * short, and a single line makes it obvious this is not a place for
+     * a paragraph. */
+    lv_textarea_set_one_line(ctx->ta, true);
+    lv_obj_set_width(ctx->ta, lv_pct(100));
+    char def[sizeof(g_backup_name)];
+    default_backup_name(def, sizeof(def));
+    lv_textarea_set_text(ctx->ta, def);
+    lv_textarea_set_cursor_pos(ctx->ta, 0);
+
+    ctx->kb = lv_keyboard_create(lv_layer_top());
+    lv_obj_set_size(ctx->kb, lv_pct(100), lv_pct(KEYBOARD_PCT_H));
+    lv_obj_align(ctx->kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(ctx->kb, ctx->ta);
+
+    lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
+    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, 16);
+
+    lv_obj_t *go = lv_msgbox_add_footer_button(ctx->mbox, "Back up");
+    lv_obj_t *no = lv_msgbox_add_footer_button(ctx->mbox, "Cancel");
+    lv_obj_t *footer = lv_msgbox_get_footer(ctx->mbox);
+    lv_obj_set_height(footer, LV_SIZE_CONTENT);
+    lv_obj_set_height(lv_msgbox_get_header(ctx->mbox), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_column(footer, DIALOG_BTN_GAP, 0);
+    lv_obj_set_style_pad_row(footer, DIALOG_BTN_GAP, 0);
+    lv_obj_set_width(go, lv_pct(100));
+    lv_obj_set_width(no, lv_pct(100));
+    lv_obj_set_height(go, DIALOG_BTN_H);
+    lv_obj_set_height(no, DIALOG_BTN_H);
+    lv_obj_set_style_bg_color(go, lv_color_hex(0x3d7ee8), 0);
+    lv_obj_set_style_bg_opa(go, LV_OPA_30, 0);
+
+    lv_obj_add_event_cb(go, bkname_go_cb, LV_EVENT_CLICKED, ctx);
+    lv_obj_add_event_cb(no, bkname_cancel_cb, LV_EVENT_CLICKED, ctx);
+
+    /* Without this the name box is blank until the first keystroke. */
+    lv_obj_invalidate(lv_layer_top());
     screenshot_soon("backup-dialog");
 }
 

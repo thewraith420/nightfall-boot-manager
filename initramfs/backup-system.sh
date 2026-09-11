@@ -36,6 +36,16 @@ die() { echo "backup: ERROR: $*" >&2; exit 1; }
 BACKUP_DIR=nocturne-backups
 [ -n "$name" ] || name=nightfall-backup-$(date +%Y%m%d-%H%M 2>/dev/null || echo manual)
 
+# The name is now typed by a person on an on-screen keyboard, so it is
+# untrusted input rather than something this script generated. A name is
+# one path component: anything else would write the archive outside
+# $BACKUP_DIR, where discover-backups.sh will never find it and
+# remove-backup.sh will refuse to delete it. Nightfall sanitises before
+# it gets here; this is the guard that does not depend on it having.
+case "$name" in
+    */*|.|..) die "implausible backup name: '$name'" ;;
+esac
+
 mounted=0
 cleanup() {
     [ "$mounted" = 1 ] && umount "$root/mnt" 2>/dev/null || true

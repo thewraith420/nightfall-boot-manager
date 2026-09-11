@@ -374,6 +374,48 @@ int main(void) {
     setenv("NIGHTFALL_REMOVE_SH", "/nonexistent/remove-kernel.sh", 1);
     ck(start_remove(0) == -1, "refuses to pretend when the remove script is missing");
 
+    /* --- backup names are typed by a person, so they are untrusted --- */
+    {
+        char out[128];
+
+        sanitize_backup_name("before-kernel-7.2.4", out, sizeof(out));
+        ck(!strcmp(out, "before-kernel-7.2.4"), "leaves a sensible name alone");
+
+        sanitize_backup_name("before big update", out, sizeof(out));
+        ck(!strcmp(out, "before-big-update"), "spaces become dashes");
+
+        /* The one that matters: a name is ONE path component. Anything
+         * with a slash would write the archive outside the backup
+         * directory, where discovery never finds it and the delete list
+         * can never offer it. */
+        sanitize_backup_name("../../etc/passwd", out, sizeof(out));
+        ck(strchr(out, '/') == NULL, "a path-shaped name cannot keep its slashes");
+
+        sanitize_backup_name("-rf", out, sizeof(out));
+        ck(out[0] != '-', "never starts with a dash (it would read as an option)");
+
+        sanitize_backup_name(".hidden", out, sizeof(out));
+        ck(out[0] != '.', "never starts with a dot (it would hide the archive)");
+
+        sanitize_backup_name("a///b", out, sizeof(out));
+        ck(!strcmp(out, "a-b"), "runs of bad characters collapse to one dash");
+
+        sanitize_backup_name("trailing---", out, sizeof(out));
+        ck(!strcmp(out, "trailing"), "no trailing dash");
+
+        /* Empty, or nothing but punctuation, must still produce a usable
+         * filename rather than an empty one. */
+        sanitize_backup_name("", out, sizeof(out));
+        ck(strstr(out, "nightfall-backup-") == out, "an empty name falls back to the default");
+        sanitize_backup_name("///", out, sizeof(out));
+        ck(strstr(out, "nightfall-backup-") == out, "so does a name that sanitises to nothing");
+
+        /* Must not run off the end of a short buffer. */
+        char small[8];
+        sanitize_backup_name("abcdefghijklmnop", small, sizeof(small));
+        ck(strlen(small) < sizeof(small), "respects the buffer size");
+    }
+
     remove("/tmp/mock-remove.sh");
     remove("/tmp/mock-install-ok.sh"); remove("/tmp/mock-install-bad.sh");
     printf("\npassed: %d  failed: %d\n", passes, fails);

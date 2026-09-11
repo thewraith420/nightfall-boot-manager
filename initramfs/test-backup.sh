@@ -124,6 +124,29 @@ out | grep -n "swept" | head -1 | grep -q . && \
       && ok "sweeps BEFORE the space check, so freed space counts" \
       || bad "swept after measuring free space"; } || bad "no sweep happened at all"
 
+echo "=== the backup name is untrusted input ==="
+# Nightfall sanitises what the on-screen keyboard produces, but this
+# guard must not depend on that having happened.
+setup 10000000 900000000 0
+rc=$(PATH="$SB/bin:$PATH" sh "$S" "$SB/root" "$SB/target" "../../escape" >"$SB/out" 2>&1; echo $?)
+[ "$rc" != 0 ] && ok "refuses a path-shaped name" || bad "accepted a name that escapes the backup directory"
+out | grep -q "implausible backup name" && ok "says why" || bad "unclear: $(out | tail -1)"
+out | grep -q "MARKER_TAR" && bad "started tar with a bad name" || ok "wrote nothing"
+
+setup 10000000 900000000 0
+rc=$(PATH="$SB/bin:$PATH" sh "$S" "$SB/root" "$SB/target" ".." >"$SB/out" 2>&1; echo $?)
+[ "$rc" != 0 ] && ok "refuses '..'" || bad "accepted '..' as a name"
+
+setup 10000000 900000000 0
+rc=$(PATH="$SB/bin:$PATH" sh "$S" "$SB/root" "$SB/target" "before-the-7.2.4-update" >"$SB/out" 2>&1; echo $?)
+[ "$rc" = 0 ] && ok "accepts an ordinary chosen name" || bad "rejected a reasonable name: $(out | tail -1)"
+out | grep -q "before-the-7.2.4-update.tar" && ok "uses the chosen name for the archive" || bad "ignored the name"
+
+setup 10000000 900000000 0
+rc=$(PATH="$SB/bin:$PATH" sh "$S" "$SB/root" "$SB/target" >"$SB/out" 2>&1; echo $?)
+[ "$rc" = 0 ] && ok "still works with no name at all" || bad "broke the unnamed case"
+out | grep -qE "nightfall-backup-[0-9]{8}-[0-9]{4}\.tar" && ok "generates a dated name when none is given" || bad "no generated name"
+
 echo "=== missing pieces are refused up front ==="
 setup 10000000 900000000 0
 rm -f "$SB/root/usr/bin/tar"
