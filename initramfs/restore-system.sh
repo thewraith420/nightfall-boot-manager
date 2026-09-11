@@ -105,8 +105,28 @@ chroot "$root" /usr/sbin/grub-probe --target=device / >/dev/null 2>&1 || \
     die "grub-probe cannot resolve the root device inside the chroot - refusing to restore anything"
 
 # ---------------------------------------------------------- extract
-# --exclude paths are relative to the archive root, which was made with
-# "tar -cf ... /" so members look like /boot/nightfall/...
+# EXCLUDE PATTERNS HERE MUST BE RELATIVE, AND THAT IS NOT A STYLE POINT.
+#
+# On extract, tar matches --exclude against the names STORED IN THE
+# ARCHIVE. backup-system.sh creates with "tar -cf archive /", and tar
+# strips the leading slash, so every member is stored relative:
+# "boot/grub/custom.cfg", not "/boot/grub/custom.cfg". A pattern with a
+# leading slash therefore matches NOTHING on the way back in.
+#
+# This was wrong for the entire life of the script and no test caught
+# it, because the tests only checked that the flag was PASSED. The first
+# real restore proved it: a marker appended to custom.cfg was gone
+# afterwards - Nightfall's own GRUB menu entry, overwritten by whatever
+# the archive happened to carry.
+#
+# The backup side was never affected and must not be "fixed" to match:
+# creating with an absolute source path means its patterns are matched
+# against absolute names, which is why --exclude=/proc works there.
+# Create and extract genuinely need different spellings.
+#
+# The absolute forms are kept alongside the relative ones purely for an
+# archive made some other way (tar -P stores absolute names). Harmless,
+# and it costs one flag each.
 # Absolute path: a bare "tar" resolves to busybox's applet under
 # Ubuntu's standalone busybox, not the chroot's GNU tar. Same note as
 # backup-system.sh - it cost a real backup attempt there.
@@ -122,8 +142,9 @@ say "extracting (this takes a while - do not power off)"
 chroot "$root" "$TAR" \
     --checkpoint=50000 --checkpoint-action=echo \
     --totals \
+    --exclude=boot/nightfall --exclude=boot/grub/custom.cfg \
     --exclude=/boot/nightfall --exclude=/boot/grub/custom.cfg \
-    --exclude=/mnt --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run \
+    --exclude=mnt --exclude=proc --exclude=sys --exclude=dev --exclude=run \
     -xpf "/mnt/$BACKUP_DIR/$name.tar" -C / \
     || die "extract failed - the system is now a mix of restored and original files; re-run the restore, or boot a live image from the same drive"
 

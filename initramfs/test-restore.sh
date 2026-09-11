@@ -91,6 +91,48 @@ rc=$(run)
 out | grep -q "mix of restored and original" \
   && ok "says the system is in a mixed state, and what to do about it" || bad "no honest description of the state"
 
+echo "=== the exclusions actually EXCLUDE (not just get passed) ==="
+# The old assertion only checked that --exclude=/boot/nightfall appeared
+# on the command line. It passed for the entire life of the script while
+# the exclusions silently matched nothing: tar compares --exclude against
+# the names STORED IN THE ARCHIVE, which are relative ("boot/grub/
+# custom.cfg"), so a leading slash never matched. The first real restore
+# overwrote Nightfall's own GRUB entry.
+#
+# So: take the exact flags the script passed, and replay them through
+# REAL tar against a real archive. Anything less is theatre.
+setup yes 0 0
+export BLKID_UUID=ARCHIVE-UUID
+rc=$(run)
+unset BLKID_UUID
+EX=$(out | grep -o '\-\-exclude=[^ ]*' | tr '\n' ' ')
+[ -n "$EX" ] && ok "captured the script's own exclude flags" || bad "no --exclude flags to test"
+
+T=$(mktemp -d)
+mkdir -p "$T/src/boot/grub" "$T/src/boot/nightfall" "$T/dst/boot/grub" "$T/dst/boot/nightfall"
+echo ARCHIVE-VERSION > "$T/src/boot/grub/custom.cfg"
+echo ARCHIVE-VERSION > "$T/src/boot/nightfall/vmlinuz"
+# Stored relative, exactly as backup-system.sh's "tar -cf archive /" does
+# after tar strips the leading slash.
+( cd "$T/src" && tar -cf "$T/a.tar" boot )
+echo LOCAL-MARKER > "$T/dst/boot/grub/custom.cfg"
+echo LOCAL-MARKER > "$T/dst/boot/nightfall/vmlinuz"
+# shellcheck disable=SC2086
+tar -xpf "$T/a.tar" -C "$T/dst" $EX 2>/dev/null
+
+grep -q LOCAL-MARKER "$T/dst/boot/nightfall/vmlinuz" \
+  && ok "/boot/nightfall really survives a real extract" \
+  || bad "Nightfall WAS overwritten - the exclude pattern does not match the archive's names"
+grep -q LOCAL-MARKER "$T/dst/boot/grub/custom.cfg" \
+  && ok "custom.cfg really survives - Nightfall's menu entry is safe" \
+  || bad "custom.cfg WAS overwritten - Nightfall's GRUB entry would be gone"
+# Sanity: the archive must genuinely have had something to overwrite
+# with, or the two assertions above pass against an empty tar.
+tar -tf "$T/a.tar" | grep -q 'boot/grub/custom.cfg' \
+  && ok "the test archive really did contain the files (so the check means something)" \
+  || bad "test archive was empty - the exclusion assertions proved nothing"
+rm -rf "$T"
+
 echo "=== fstab: a backup from THIS machine is left alone ==="
 setup yes 0 0
 # blkid reports the UUID the ARCHIVE's fstab names, i.e. same hardware.
