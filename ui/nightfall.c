@@ -1058,7 +1058,24 @@ static void open_confirm_dialog(int idx) {
      * tablet this size. The row above pairs Recovery with Cancel when
      * there is a recovery variant, and otherwise lets Cancel span - a
      * lone 47% button beside an empty gap reads as a layout bug. */
-    int rec = find_recovery_for(idx);
+    /* RECOVERY IS DELIBERATELY NOT OFFERED HERE.
+     *
+     * Ubuntu's recovery mode is an ncurses menu. Tapping it on a tablet
+     * with no keyboard reaches a screen nothing can be done with, and
+     * the only way out is holding the power button - a button whose one
+     * outcome is a dead machine is worse than no button.
+     *
+     * Nothing is lost by hiding it: GRUB still lists the recovery
+     * entries, and with a keyboard attached that is the normal way in.
+     * Restart on the main menu goes there. The Repair menu covers what
+     * recovery mode was actually wanted for.
+     *
+     * find_recovery_for() stays, and so do the tests around it: the
+     * recovery ENTRY still matters elsewhere - apply-cmdline.sh must
+     * never override it, which is what keeps a bad saved command line
+     * from breaking the fallback too. */
+    int rec = -1;
+    (void)find_recovery_for;
     lv_obj_t *edit_btn = lv_msgbox_add_footer_button(mbox, "Edit");
     lv_obj_t *default_btn = lv_msgbox_add_footer_button(mbox, "Set Default");
     lv_obj_t *recovery_btn = (rec >= 0) ? lv_msgbox_add_footer_button(mbox, "Recovery") : NULL;
@@ -1153,6 +1170,10 @@ static int   g_install_fd  = -1;      /* read end of the child's output */
 static int   g_child_exit_ok = 0;     /* set by install_pump when the child is reaped */
 static pid_t g_install_pid = -1;
 static int   g_reload = 0;            /* finished: ask init to re-scan */
+/* finished: ask init to restart or power off. Nightfall cannot do it
+ * itself and should not: init owns the mount, so it is the one that can
+ * unmount the root cleanly first. Same split as SET_DEFAULT. */
+static const char *g_power_action = NULL;
 static lv_obj_t *g_prog_status;
 static lv_obj_t *g_prog_log;
 static lv_obj_t *g_prog_spinner;
@@ -1631,6 +1652,50 @@ static int start_remove_backup(int idx) {
                        "Deletes the archive from the drive. This machine is not touched.");
 }
 
+static const char *repair_script(void) {
+    const char *s = getenv("NIGHTFALL_REPAIR_SH");
+    return s ? s : "/bin/repair-system.sh";
+}
+static const char *fsck_script(void) {
+    const char *s = getenv("NIGHTFALL_FSCK_SH");
+    return s ? s : "/bin/fsck-root.sh";
+}
+static const char *clear_script(void) {
+    const char *s = getenv("NIGHTFALL_CLEAR_SH");
+    return s ? s : "/bin/clear-overrides.sh";
+}
+
+static int start_fsck(const char *mode) {
+    g_child_what = "Check";
+    g_child_ok_msg  = "Finished. Read the RESULT line above.";
+    /* Not "nothing changed": a check that exits non-zero may still have
+     * repaired plenty before hitting what it could not fix. */
+    g_child_bad_msg = "Errors remain - see the RESULT line above.";
+    return start_child(fsck_script(), mode, NULL, NULL,
+                       LV_SYMBOL_REFRESH "  Checking the filesystem",
+                       strcmp(mode, "force") == 0 ? "full repair" : "safe check",
+                       "The root is unmounted while this runs. Do not power off.");
+}
+
+static int start_repair(const char *action, const char *heading, const char *subject) {
+    g_child_what = "Repair";
+    g_child_ok_msg  = "Finished.";
+    g_child_bad_msg = "Failed - see the output above.";
+    return start_child(repair_script(), action, NULL, NULL,
+                       heading, subject,
+                       "Runs inside the installed system. Do not power off.");
+}
+
+static int start_clear(void) {
+    g_child_what = "Clear";
+    g_child_ok_msg  = "Cleared. The next boot uses what grub.cfg says.";
+    g_child_bad_msg = "Failed - see the output above.";
+    return start_child(clear_script(), "all", NULL, NULL,
+                       LV_SYMBOL_TRASH "  Clearing saved settings",
+                       "default and command lines",
+                       "Removes only Nightfall's own saved settings.");
+}
+
 static const char *rename_backup_script(void) {
     const char *s = getenv("NIGHTFALL_RENAME_BACKUP_SH");
     return s ? s : "/bin/rename-backup.sh";
@@ -2020,6 +2085,9 @@ static void rescan_cb(lv_event_t *e);
 static void show_restore_list(void);
 static void show_delete_backup_list(void);
 static void show_rename_backup_list(void);
+static void show_repair_menu(void);
+static void restart_cb(lv_event_t *e);
+static void poweroff_cb(lv_event_t *e);
 
 static lv_obj_t *make_row_h(const char *icon, const char *text, int dimmed, int h) {
     lv_obj_t *btn = lv_button_create(g_list);
@@ -2081,6 +2149,15 @@ static void show_main_menu(void) {
                  g_target_n, g_target_n == 1 ? "" : "s");
     b = make_row_h(LV_SYMBOL_SAVE, buf, g_target_n == 0 && g_backup_n == 0, MENU_ROW_H);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_backup_menu);
+
+    b = make_row_h(LV_SYMBOL_SETTINGS, "Repair", 0, MENU_ROW_H);
+    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_repair_menu);
+
+    b = make_row_h(LV_SYMBOL_REFRESH, "Restart   (to the GRUB menu)", 0, MENU_ROW_H);
+    lv_obj_add_event_cb(b, restart_cb, LV_EVENT_CLICKED, NULL);
+
+    b = make_row_h(LV_SYMBOL_POWER, "Power off", 0, MENU_ROW_H);
+    lv_obj_add_event_cb(b, poweroff_cb, LV_EVENT_CLICKED, NULL);
 }
 
 static void rescan_cb(lv_event_t *e) {
@@ -2094,6 +2171,134 @@ static void rescan_cb(lv_event_t *e) {
 
     rescan_drives();
     show_backup_menu();
+}
+
+/* Each repair is a confirm then a child, so they share one pattern. The
+ * index carried through simple_confirm() is unused here - these act on
+ * the machine, not on a row - so it is passed as 0. */
+static void fsck_safe_go_cb(lv_event_t *e) {
+    lv_msgbox_close_async(lv_event_get_user_data(e)); start_fsck("preen");
+}
+static void fsck_force_go_cb(lv_event_t *e) {
+    lv_msgbox_close_async(lv_event_get_user_data(e)); start_fsck("force");
+}
+static void dpkg_go_cb(lv_event_t *e) {
+    lv_msgbox_close_async(lv_event_get_user_data(e));
+    start_repair("dpkg", LV_SYMBOL_DOWNLOAD "  Repairing packages", "dpkg --configure -a");
+}
+static void clean_go_cb(lv_event_t *e) {
+    lv_msgbox_close_async(lv_event_get_user_data(e));
+    start_repair("clean", LV_SYMBOL_TRASH "  Freeing disk space", "package cache and journal");
+}
+static void grubup_go_cb(lv_event_t *e) {
+    lv_msgbox_close_async(lv_event_get_user_data(e));
+    start_repair("grub", LV_SYMBOL_REFRESH "  Updating the boot menu", "update-grub");
+}
+static void clear_go_cb(lv_event_t *e) {
+    lv_msgbox_close_async(lv_event_get_user_data(e)); start_clear();
+}
+
+static void fsck_safe_cb(lv_event_t *e) { (void)e;
+    simple_confirm(0, "Check the filesystem?",
+        "Unmounts the root filesystem and checks it with nothing else "
+        "touching it - which is why this works here and not in Ubuntu's "
+        "recovery mode.\n\n"
+        "Fixes only what needs no decision. Nothing is thrown away.",
+        "Check", fsck_safe_go_cb, 0);
+}
+static void fsck_force_cb(lv_event_t *e) { (void)e;
+    simple_confirm(0, "Full repair?",
+        "Answers YES to every repair e2fsck offers, including ones that "
+        "move damaged files into /lost+found.\n\n"
+        "Right when the alternative is a machine that will not boot. "
+        "Try Check first - it will say if this is needed.",
+        "Full repair", fsck_force_go_cb, 1);
+}
+static void dpkg_cb(lv_event_t *e) { (void)e;
+    simple_confirm(0, "Repair packages?",
+        "Finishes configuring packages left half-installed by an "
+        "interrupted update, and fixes what it can from what is already "
+        "on disk.\n\nNeeds no network.",
+        "Repair", dpkg_go_cb, 0);
+}
+static void clean_cb(lv_event_t *e) { (void)e;
+    simple_confirm(0, "Free disk space?",
+        "Empties the package cache and trims the systemd journal to "
+        "50M.\n\nDoes NOT remove any packages or kernels - use Remove a "
+        "kernel for that.",
+        "Free space", clean_go_cb, 0);
+}
+static void grubup_cb(lv_event_t *e) { (void)e;
+    simple_confirm(0, "Update the boot menu?",
+        "Regenerates grub.cfg from the kernels actually on disk.\n\n"
+        "The fix when the menu lists kernels that are gone, or misses "
+        "ones that are there.",
+        "Update", grubup_go_cb, 0);
+}
+static void clear_cb(lv_event_t *e) { (void)e;
+    simple_confirm(0, "Clear Nightfall's saved settings?",
+        "Forgets the saved default kernel and every saved command "
+        "line.\n\nThe way out if a saved command line is what stops the "
+        "machine booting - after this, every entry boots exactly what "
+        "grub.cfg says.",
+        "Clear", clear_go_cb, 1);
+}
+
+/* Restart and Power off. Nightfall had no way to leave without booting
+ * a kernel, which on a keyboardless tablet meant holding the power
+ * button. Restart is also the honest answer to "take me to the GRUB
+ * menu": GRUB handed off long before Nightfall existed, so there is
+ * nothing to return to - you reboot, and GRUB's menu comes up on the
+ * way back, where a keyboard reaches Ubuntu's real recovery. */
+static void power_go_cb(lv_event_t *e) {
+    lv_obj_t *mbox = lv_event_get_user_data(e);
+    g_power_action = (int)(intptr_t)lv_obj_get_user_data(mbox) ? "poweroff" : "reboot";
+}
+
+static void restart_cb(lv_event_t *e) { (void)e;
+    simple_confirm(0, "Restart?",
+        "Reboots the machine. GRUB's menu appears on the way back - with "
+        "a keyboard attached that is where Ubuntu's own recovery entries "
+        "are.\n\nNothing on disk is changed.",
+        "Restart", power_go_cb, 0);
+}
+static void poweroff_cb(lv_event_t *e) { (void)e;
+    lv_obj_t *m = simple_confirm(1, "Power off?",
+        "Shuts the machine down.\n\nNothing on disk is changed.",
+        "Power off", power_go_cb, 0);
+    (void)m;
+}
+
+static void show_repair_menu(void) {
+    lv_obj_clean(g_list);
+    lv_label_set_text(g_header, LV_SYMBOL_SETTINGS "  Repair");
+    add_back_row(show_main_menu);
+
+    lv_obj_t *b;
+    b = make_row(LV_SYMBOL_REFRESH, "Check the filesystem", 0);
+    lv_obj_add_event_cb(b, fsck_safe_cb, LV_EVENT_CLICKED, NULL);
+
+    b = make_row(LV_SYMBOL_WARNING, "Full repair   (last resort)", 0);
+    lv_obj_add_event_cb(b, fsck_force_cb, LV_EVENT_CLICKED, NULL);
+
+    b = make_row(LV_SYMBOL_DOWNLOAD, "Repair packages", 0);
+    lv_obj_add_event_cb(b, dpkg_cb, LV_EVENT_CLICKED, NULL);
+
+    b = make_row(LV_SYMBOL_TRASH, "Free disk space", 0);
+    lv_obj_add_event_cb(b, clean_cb, LV_EVENT_CLICKED, NULL);
+
+    b = make_row(LV_SYMBOL_REFRESH, "Update the boot menu", 0);
+    lv_obj_add_event_cb(b, grubup_cb, LV_EVENT_CLICKED, NULL);
+
+    b = make_row(LV_SYMBOL_SETTINGS, "Clear Nightfall's saved settings", 0);
+    lv_obj_add_event_cb(b, clear_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *l = lv_label_create(g_list);
+    lv_label_set_text(l, "These replace Ubuntu's recovery menu, which needs\n"
+                         "a keyboard this machine does not have.\n\n"
+                         "For the real recovery menu, restart and pick a\n"
+                         "recovery entry in GRUB with a keyboard attached.");
+    lv_obj_set_style_text_color(l, lv_color_hex(0x93a0aa), 0);
 }
 
 static void show_backup_menu(void) {
@@ -2615,7 +2820,7 @@ int main(int argc, char **argv) {
             install_pump(inst_buf, sizeof(inst_buf), &inst_len);
         }
 
-        if (g_selected >= 0 || g_install >= 0 || g_reload) break;
+        if (g_selected >= 0 || g_install >= 0 || g_reload || g_power_action) break;
 
         if (fds[touch_idx].revents & POLLIN) {
             struct input_event ev;
@@ -2694,6 +2899,12 @@ int main(int argc, char **argv) {
          * different key from INSTALL_TARBALL. */
         shell_quote(stdout, "RELOAD", "1");
         fprintf(stderr, "nightfall: install finished, asking for a menu reload\n");
+        return 0;
+    }
+
+    if (g_power_action) {
+        shell_quote(stdout, "POWER_ACTION", g_power_action);
+        fprintf(stderr, "nightfall: %s requested\n", g_power_action);
         return 0;
     }
 

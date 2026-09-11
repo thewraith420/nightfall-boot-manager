@@ -337,9 +337,15 @@ int main(void) {
             lv_obj_t *mb  = lv_obj_get_child(bd, 0);
             lv_obj_t *ft  = lv_msgbox_get_footer(mb);
             uint32_t nb = lv_obj_get_child_count(ft);
-            ck(nb == (variant ? 4u : 5u),
+            /* FOUR either way now. Recovery is deliberately not offered:
+             * Ubuntu's recovery mode is an ncurses menu, and on a tablet
+             * with no keyboard tapping it reaches a screen nothing can
+             * be done with. Asserted for BOTH cases on purpose - a
+             * kernel that HAS a recovery variant must still show four,
+             * so quietly bringing the button back trips this. */
+            ck(nb == 4u,
                variant ? "no recovery variant: four buttons"
-                       : "recovery variant present: five buttons");
+                       : "recovery variant present: still four buttons, no Recovery");
 
             /* Boot is created last, so it is the final child. */
             lv_obj_t *boot = lv_obj_get_child(ft, nb - 1);
@@ -352,11 +358,11 @@ int main(void) {
                 lv_area_t oa; lv_obj_get_coords(lv_obj_get_child(ft, i), &oa);
                 if (oa.y1 >= ba.y1) lowest = 0;
             }
-            ck(lowest, variant ? "Boot is the bottom-most button (no recovery)"
-                               : "Boot is the bottom-most button (with recovery)");
+            ck(lowest, variant ? "Boot is the bottom-most button (no recovery variant)"
+                               : "Boot is the bottom-most button (recovery variant exists)");
             ck(lv_area_get_width(&ba) > (lv_area_get_width(&fa) * 3) / 4,
-               variant ? "Boot spans the row (no recovery)"
-                       : "Boot spans the row (with recovery)");
+               variant ? "Boot spans the row (no recovery variant)"
+                       : "Boot spans the row (recovery variant exists)");
             lv_obj_delete(bd);
             lv_obj_update_layout(lv_layer_top());
         }

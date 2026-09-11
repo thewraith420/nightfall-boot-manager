@@ -28,7 +28,8 @@ trap 'rm -rf "$staging"' EXIT
 # applet symlinks into the one busybox binary, so they cost no space.
 APPLETS="sh mount umount mkdir echo printf cut head awk cat ls
          sleep dmesg uname tail sync date wc grep
-         tar chroot tee rm df mv"
+         tar chroot tee rm df mv
+         reboot poweroff"
 
 say() { echo "==> $*"; }
 die() { echo "build-initramfs: $*" >&2; exit 1; }
@@ -44,6 +45,14 @@ need_cmd fakeroot
 [ -n "$missing" ] && die "missing build tools:$missing
   Debian/Ubuntu: sudo apt install busybox-static cpio gzip fakeroot"
 
+# e2fsck, so Repair can check the root filesystem with it UNMOUNTED -
+# which is the one thing Ubuntu's own recovery mode cannot do here,
+# because it runs with / still mounted. Built on the same machine it
+# will check, so the version always matches the filesystem's features.
+e2fsck_bin=$(command -v e2fsck || echo /sbin/e2fsck)
+[ -x "$e2fsck_bin" ] || die "e2fsck not found - Repair cannot check the root filesystem.
+  Debian/Ubuntu: sudo apt install e2fsprogs"
+
 kexec_bin=$(command -v kexec || true)
 [ -n "$kexec_bin" ] || die "kexec not found - Nightfall's whole job is to kexec.
   Debian/Ubuntu: sudo apt install kexec-tools"
@@ -57,7 +66,8 @@ for f in "$here/init" "$here/discover-kernels.sh" "$here/apply-default.sh" \
          "$here/remove-kernel.sh" "$here/apply-cmdline.sh" \
          "$here/discover-backup-targets.sh" "$here/backup-system.sh" \
          "$here/restore-system.sh" "$here/remove-backup.sh" \
-         "$here/rename-backup.sh" \
+         "$here/rename-backup.sh" "$here/fsck-root.sh" \
+         "$here/repair-system.sh" "$here/clear-overrides.sh" \
          "$here/discover-backups.sh" "$here/scan-drives.sh" \
          "$repo/boot-integration/kexec-boot.sh"; do
     [ -r "$f" ] || die "missing source file: $f"
@@ -82,6 +92,7 @@ done
 ln -sf ../bin/busybox "$staging/sbin/mdev"
 
 install -m 0755 "$kexec_bin" "$staging/sbin/kexec"
+install -m 0755 "$e2fsck_bin" "$staging/sbin/e2fsck"
 ln -sf ../sbin/kexec "$staging/bin/kexec"
 install -m 0755 "$nightfall_bin" "$staging/bin/nightfall"
 
@@ -99,6 +110,9 @@ install -m 0755 "$here/backup-system.sh"            "$staging/bin/backup-system.
 install -m 0755 "$here/restore-system.sh"           "$staging/bin/restore-system.sh"
 install -m 0755 "$here/remove-backup.sh"            "$staging/bin/remove-backup.sh"
 install -m 0755 "$here/rename-backup.sh"            "$staging/bin/rename-backup.sh"
+install -m 0755 "$here/fsck-root.sh"               "$staging/bin/fsck-root.sh"
+install -m 0755 "$here/repair-system.sh"           "$staging/bin/repair-system.sh"
+install -m 0755 "$here/clear-overrides.sh"         "$staging/bin/clear-overrides.sh"
 install -m 0755 "$here/discover-backups.sh"         "$staging/bin/discover-backups.sh"
 install -m 0755 "$here/scan-drives.sh"              "$staging/bin/scan-drives.sh"
 install -m 0755 "$repo/boot-integration/kexec-boot.sh" "$staging/sbin/kexec-boot.sh"
@@ -127,7 +141,8 @@ copy_libs_for() {
 }
 
 say "resolving shared libraries"
-for b in "$staging/bin/busybox" "$staging/sbin/kexec" "$staging/bin/nightfall"; do
+for b in "$staging/bin/busybox" "$staging/sbin/kexec" "$staging/bin/nightfall" \
+         "$staging/sbin/e2fsck"; do
     echo "  $(basename "$b"):"
     copy_libs_for "$b"
 done

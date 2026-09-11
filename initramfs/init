@@ -188,7 +188,14 @@ rescue() {
 # get added instead. /boot/efi is a separate vfat ESP but only holds
 # GRUB's own EFI binary - grub.cfg lives on this ext4 partition, so the
 # ESP is never mounted here.
+# EXPORTED, not just set. Nightfall reads it with getenv() to hand the
+# real root device to scan-drives.sh and to the repair actions - and
+# without the export it silently got NULL and fell back to a hardcoded
+# /dev/mmcblk0p2. That happens to be correct on this machine, which is
+# exactly why it went unnoticed; a filesystem checker must not run on a
+# device chosen by a lucky default.
 : "${REAL_ROOT_DEV:=/dev/mmcblk0p2}"
+export REAL_ROOT_DEV
 # eMMC probe is not instant, and a root mount that fails here drops
 # straight to the rescue shell - the harshest outcome in the script.
 wait_for "root device" "$REAL_ROOT_DEV" "${NIGHTFALL_WAIT_ROOT:-15}"
@@ -330,6 +337,7 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
     # install instead of boot. Exactly one of the last two.
     INSTALL_TARBALL=
     RELOAD=
+    POWER_ACTION=
     SET_CMDLINE=
     . /run/nightfall/selected
 
@@ -337,6 +345,31 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
     # nothing to install here - only a stale kernel list to refresh.
     # Deliberately a different key from INSTALL_TARBALL: treating them
     # the same would install the same tarball a second time.
+    # Restart / Power off. Nightfall cannot do this itself and should
+    # not: init owns the root mount, so it is the one that can put the
+    # filesystem down cleanly first. Same split as SET_DEFAULT.
+    #
+    # Restart is also the answer to "take me to the GRUB menu" - GRUB
+    # handed off long before Nightfall started, so there is nothing to
+    # return to; you reboot and GRUB's menu comes up on the way back.
+    if [ -n "$POWER_ACTION" ]; then
+        stage "$POWER_ACTION requested from Nightfall"
+        save_log "$POWER_ACTION requested" 2>/dev/null || :
+        sync
+        umount /mnt/root 2>/dev/null || :
+        sync
+        case "$POWER_ACTION" in
+            poweroff) echo "nightfall: powering off" >&2; poweroff -f ;;
+            *)        echo "nightfall: restarting" >&2;   reboot -f ;;
+        esac
+        # -f does the syscall directly, so this is unreachable. If some
+        # build of busybox signals PID 1 instead - which is this script -
+        # do not fall through into booting something the user did not
+        # choose.
+        sleep 10
+        rescue "$POWER_ACTION did not take effect"
+    fi
+
     if [ -n "$RELOAD" ]; then
         reload_rounds=$((reload_rounds + 1))
         if [ "$reload_rounds" -le "${NIGHTFALL_MAX_RELOADS:-12}" ]; then

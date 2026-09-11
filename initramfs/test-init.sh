@@ -100,6 +100,8 @@ printf 'Ubuntu old\t/boot/vmlinuz-old\t/boot/initrd.img-old\tro quiet\t\n'
 EOF
   printf '#!/bin/sh\ncat "$1"\n' > "$SB/bin/apply-default.sh"
   printf '#!/bin/sh\nprintf "%s\\tv1\\t120M\\n" /home/bob/k-installer.tar.gz\n' > "$SB/bin/discover-tarballs.sh"
+  printf '#!/bin/sh\necho "MARKER_REBOOT $*" >&2\nexit 0\n'   > "$SB/bin/reboot"
+  printf '#!/bin/sh\necho "MARKER_POWEROFF $*" >&2\nexit 0\n' > "$SB/bin/poweroff"
   # Counts its runs, so a refresh that fails to re-scan is visible.
   # Without this mock the call just fails and is swallowed, which looks
   # identical to it never being made.
@@ -181,6 +183,8 @@ else echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'; echo 'SELECTED_INITRD=x'; echo 
 exit 0
 EOF
     ;;
+    restart)  printf '#!/bin/sh\necho "POWER_ACTION=reboot"\nexit 0\n'   > "$SB/bin/nightfall" ;;
+    shutdown) printf '#!/bin/sh\necho "POWER_ACTION=poweroff"\nexit 0\n' > "$SB/bin/nightfall" ;;
   esac
   chmod +x "$SB"/bin/* "$SB"/sbin/*
 
@@ -379,6 +383,21 @@ both | grep -q "MARKER_KEXEC.*vmlinuz-chosen" \
   || bad "gave up and booted early: $(log | grep -i 'too many' | head -1)"
 log | grep -q "too many reloads" && bad "hit the install leash on plain reloads" \
   || ok "does not treat reloads as install rounds"
+
+echo "=== 12. Restart and Power off leave without booting anything ==="
+# Nightfall had no way out except booting a kernel, which on a
+# keyboardless tablet meant holding the power button. Restart is also
+# how you reach the GRUB menu, since GRUB is long gone by the time
+# Nightfall runs.
+setup pwr restart 0 0; run
+both | grep -q "MARKER_REBOOT" && ok "reboots when asked to restart" || bad "did not reboot"
+both | grep -q "MARKER_KEXEC" && bad "booted a kernel instead of restarting" || ok "does NOT kexec anything"
+log  | grep -q "reboot requested" && ok "the boot log records why" || bad "no log entry"
+
+setup pwr shutdown 0 0; run
+both | grep -q "MARKER_POWEROFF" && ok "powers off when asked" || bad "did not power off"
+both | grep -q "MARKER_REBOOT" && bad "rebooted instead of powering off" || ok "does not confuse the two"
+both | grep -q "MARKER_KEXEC" && bad "booted a kernel instead" || ok "does NOT kexec anything"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"
