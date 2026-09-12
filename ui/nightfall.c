@@ -238,6 +238,28 @@ static int load_backups(const char *path, struct backup *b, int max) {
 
 /* ---------------- rotation (see file header - LVGL is not told about this) ---------------- */
 
+/* Changing rotation while running.
+ *
+ * Cheap by construction: rotation is applied at exactly two points, the
+ * flush callback and touch input, both of which read ctx->rot every
+ * time. Nothing caches it, so the transform follows immediately.
+ *
+ * The part that is NOT free is the canvas. A 90-degree turn swaps the
+ * logical dimensions, and flush_cb refuses to draw when the canvas does
+ * not match the framebuffer for the current rotation - it skips the
+ * flush rather than scribble. So the resolution has to move in the same
+ * breath as ctx->rot, or the screen simply goes black.
+ *
+ * Layout comes along for free because every screen is built with
+ * percentages and flex rather than fixed pixel sizes;
+ * lv_display_set_resolution re-runs layout on the active screen.
+ * lv_layer_top() is invalidated too, for the same reason the Edit
+ * dialog needs it: this display is driven manually, so nothing else
+ * decides a repaint is due, and a dialog open across a rotation would
+ * otherwise keep its old geometry on screen. */
+static void apply_rotation(int rot);
+
+
 enum { ROT_0, ROT_90, ROT_180, ROT_270 };
 
 static int parse_rotation(void) {
@@ -699,6 +721,80 @@ static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
  * PPM because it is ~15 lines of code and needs no zlib in the
  * initramfs; ui/ppm-to-png.sh converts afterwards on a normal machine. */
 static struct nightfall_ctx *g_ctx;
+
+/* ---------------- auto-rotate: reading the display accelerometer ----------------
+ *
+ * The sensor is cros-ec-accel, reached through the EC's sensorhub and
+ * exposed as an IIO device. Polled by sysfs rather than using IIO's
+ * buffered/triggered capture: orientation changes at human speed, and a
+ * couple of reads per second costs nothing next to standing up a
+ * trigger and a ring buffer inside an initramfs.
+ *
+ * There may be more than one accelerometer - a detachable base can
+ * carry its own - so the DISPLAY one is selected by label, not by
+ * taking whichever device turns up first. */
+#define ACCEL_LABEL "accel-display"
+#define ACCEL_NAME  "cros-ec-accel"
+
+/* Which rotation each "this edge is down" case means.
+ *
+ * CALIBRATION LIVES HERE, and deliberately in one place: the mapping
+ * from sensor axes to screen orientation depends on how the panel is
+ * physically mounted, which no amount of reasoning settles - it takes
+ * one observation on the real tablet. The poll logs the raw values and
+ * the orientation it picked, so a single run holding the device each
+ * way says whether these four entries are right, and fixing them is
+ * editing this table rather than unpicking logic.
+ *
+ * Index: 0 = +Y down, 1 = -Y down, 2 = +X down, 3 = -X down. */
+static const int ACCEL_ROT[4] = { ROT_270, ROT_90, ROT_0, ROT_180 };
+
+/* Below this, the device is lying too flat for X/Y to mean anything and
+ * the current orientation is kept. In raw counts; cros-ec-accel reports
+ * roughly 1g ~ 1024, so this is about a 12 degree tilt. */
+#define ACCEL_FLAT 200
+
+/* Orientation implied by one reading, or `fallback` when it is too flat
+ * to say. Pure function of its inputs - all the testing lives here. */
+static int accel_orientation(long ax, long ay, int fallback) {
+    long axm = ax < 0 ? -ax : ax;
+    long aym = ay < 0 ? -ay : ay;
+    if (axm < ACCEL_FLAT && aym < ACCEL_FLAT) return fallback;
+    if (aym >= axm) return ACCEL_ROT[ay > 0 ? 0 : 1];
+    return ACCEL_ROT[ax > 0 ? 2 : 3];
+}
+
+/* Debounce. A tablet passes through other orientations on the way to
+ * the one you meant, and rotating the UI at every transient is worse
+ * than not rotating at all - so a new orientation has to persist before
+ * it counts. Returns 1 when `want` has been steady long enough to act
+ * on. */
+struct accel_debounce { int cand; int n; };
+static int accel_settled(struct accel_debounce *d, int want, int current, int need) {
+    if (want == current) { d->cand = want; d->n = 0; return 0; }
+    if (want != d->cand) { d->cand = want; d->n = 1; return 0; }
+    if (++d->n < need) return 0;
+    d->n = 0;
+    return 1;
+}
+
+static void apply_rotation(int rot) {
+    if (!g_ctx) return;
+    if (rot == g_ctx->rot) return;
+    lv_display_t *disp = lv_display_get_default();
+    if (!disp) return;
+
+    struct drm_dev *d = g_ctx->drm;
+    const int swapped = (rot == ROT_90 || rot == ROT_270);
+    g_ctx->rot = rot;
+    g_ctx->cw = swapped ? (int)d->height : (int)d->width;
+    g_ctx->ch = swapped ? (int)d->width  : (int)d->height;
+
+    lv_display_set_resolution(disp, g_ctx->cw, g_ctx->ch);
+    lv_obj_invalidate(lv_screen_active());
+    lv_obj_invalidate(lv_layer_top());
+}
+
 static const char *g_shot_dir;
 static const char *g_shot_pending;
 static int g_shot_n;
@@ -2708,7 +2804,16 @@ int main(int argc, char **argv) {
     lv_display_set_dpi(disp, PANEL_DPI);
     lv_display_set_user_data(disp, &ctx);
     lv_display_set_flush_cb(disp, flush_cb);
-    size_t buf_size = (size_t)ctx.cw * 64 * 4; /* partial buffer, 64 logical rows */
+    /* Sized for the LARGER dimension, not the current one. A 90-degree
+     * turn swaps the logical width between drm.width and drm.height, and
+     * a buffer cut to the narrower of the two is then too small for the
+     * wider orientation. Allocating for the max once means rotation
+     * never has to reallocate mid-flight - the one thing that would turn
+     * a rotation into a crash. LVGL derives rows-per-chunk from
+     * buf_size/width, so a roomier buffer on the narrow orientation just
+     * means fewer, larger chunks. */
+    int maxdim = (int)(drm.width > drm.height ? drm.width : drm.height);
+    size_t buf_size = (size_t)maxdim * 64 * 4; /* partial buffer, >=64 logical rows */
     void *lvgl_buf = malloc(buf_size);
     if (!lvgl_buf) {
         fprintf(stderr, "nightfall: out of memory allocating LVGL draw buffer\n");

@@ -30,6 +30,10 @@ static void flush_reference(struct nightfall_ctx *ctx, const lv_area_t *area, ui
 #define PW 800
 #define PH 600
 static int fails, passes;
+static void ck(int c, const char *m) {
+    printf(c ? "  [ok] %s\n" : "  [FAIL] %s\n", m);
+    c ? passes++ : fails++;
+}
 
 int main(void) {
     lv_init();
@@ -80,6 +84,68 @@ int main(void) {
         if (mismatches == 0) { printf("  [ok] rot %-4s pixel-identical to the reference over 60 areas\n", names[r]); passes++; }
         else { printf("  [FAIL] rot %-4s differs from reference in %d/60 areas\n", names[r], mismatches); fails++; }
     }
+    /* ---- auto-rotate: orientation from a raw accelerometer reading ---- */
+    /* Pure function, so the whole mapping is testable years before the
+     * kernel can produce a reading. The four ACCEL_ROT entries are the
+     * calibration; these assertions pin the LOGIC around them, not the
+     * values, so recalibrating on real hardware does not invalidate the
+     * suite. */
+    {
+        const int keep = ROT_90;   /* stand-in for "current orientation" */
+
+        /* Lying flat: neither axis means anything, so nothing changes.
+         * Without this a tablet on a desk flickers between orientations
+         * on sensor noise alone. */
+        ck(accel_orientation(0, 0, keep) == keep, "flat on a table keeps the current rotation");
+        ck(accel_orientation(150, -150, keep) == keep, "just under the tilt threshold: no change");
+
+        /* The dominant axis decides. */
+        ck(accel_orientation(0, 900, keep) == ACCEL_ROT[0], "+Y down picks entry 0");
+        ck(accel_orientation(0, -900, keep) == ACCEL_ROT[1], "-Y down picks entry 1");
+        ck(accel_orientation(900, 0, keep) == ACCEL_ROT[2], "+X down picks entry 2");
+        ck(accel_orientation(-900, 0, keep) == ACCEL_ROT[3], "-X down picks entry 3");
+
+        /* Mixed tilt goes with the larger component, and the boundary is
+         * decided rather than left to chance. */
+        ck(accel_orientation(300, 900, keep) == ACCEL_ROT[0], "mostly +Y wins over some +X");
+        ck(accel_orientation(900, 300, keep) == ACCEL_ROT[2], "mostly +X wins over some +Y");
+        ck(accel_orientation(700, 700, keep) == ACCEL_ROT[0], "an exact 45 degrees resolves to Y, not undefined");
+
+        /* Every orientation must be reachable, or one edge of the tablet
+         * silently never works. */
+        int seen[4] = {0,0,0,0};
+        seen[accel_orientation(0, 900, keep)]++;
+        seen[accel_orientation(0, -900, keep)]++;
+        seen[accel_orientation(900, 0, keep)]++;
+        seen[accel_orientation(-900, 0, keep)]++;
+        int all = 1;
+        for (int i2 = 0; i2 < 4; i2++) if (seen[i2] != 1) all = 0;
+        ck(all, "the four cases map onto the four rotations, one each");
+    }
+
+    /* ---- auto-rotate: the debounce ---- */
+    {
+        struct accel_debounce d = {0, 0};
+        const int cur = ROT_90;
+        /* A transient must not rotate the UI. Turning a tablet passes
+         * through orientations you did not mean. */
+        ck(!accel_settled(&d, ROT_0, cur, 3), "one sample of a new orientation is not enough");
+        ck(!accel_settled(&d, ROT_0, cur, 3), "two is not enough either");
+        ck(accel_settled(&d, ROT_0, cur, 3), "three in a row settles");
+
+        /* An interrupted run starts over rather than accumulating. */
+        struct accel_debounce d2 = {0, 0};
+        accel_settled(&d2, ROT_0, cur, 3);
+        accel_settled(&d2, ROT_180, cur, 3);
+        ck(!accel_settled(&d2, ROT_0, cur, 3), "a different reading resets the count");
+
+        /* Already there: nothing to settle, and the counter clears so a
+         * later change starts from zero. */
+        struct accel_debounce d3 = {0, 0};
+        ck(!accel_settled(&d3, cur, cur, 3), "the current orientation never fires a change");
+        ck(!accel_settled(&d3, ROT_0, cur, 3), "and the count restarts after it");
+    }
+
     printf("\npassed: %d  failed: %d\n", passes, fails);
     return fails ? 1 : 0;
 }
