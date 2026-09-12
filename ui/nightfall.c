@@ -806,6 +806,85 @@ static int accel_settled(struct accel_debounce *d, int want, int current, int ne
     return 1;
 }
 
+/* The sysfs directory of the display accelerometer, or empty when there
+ * is none - every picker kernel before 2026-09-12 lacked the cros-ec
+ * IIO chain, and Nightfall has to stay perfectly usable on those.
+ * NIGHTFALL_ACCEL points it somewhere else for testing. */
+static char g_accel_dir[160];
+static int  g_autorotate;          /* 0 disables the whole thing */
+
+static void accel_find(void) {
+    const char *over = getenv("NIGHTFALL_ACCEL");
+    if (over && *over) { snprintf(g_accel_dir, sizeof g_accel_dir, "%.159s", over); return; }
+
+    DIR *dir = opendir("/sys/bus/iio/devices");
+    if (!dir) return;
+    struct dirent *e;
+    while ((e = readdir(dir))) {
+        if (strncmp(e->d_name, "iio:device", 10) != 0) continue;
+        char path[200], name[64] = {0};
+        snprintf(path, sizeof path, "/sys/bus/iio/devices/%.40s/name", e->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        if (!fgets(name, sizeof name, f)) { fclose(f); continue; }
+        fclose(f);
+        name[strcspn(name, "\n")] = '\0';
+        /* By name AND label: a detachable base can carry its own
+         * accelerometer, and rotating the screen to match the keyboard's
+         * idea of down would be worse than not rotating at all. */
+        if (strcmp(name, ACCEL_NAME) != 0) continue;
+        char lpath[200], label[64] = {0};
+        snprintf(lpath, sizeof lpath, "/sys/bus/iio/devices/%.40s/label", e->d_name);
+        FILE *lf = fopen(lpath, "r");
+        if (lf) {
+            if (fgets(label, sizeof label, lf)) label[strcspn(label, "\n")] = '\0';
+            fclose(lf);
+        }
+        if (label[0] && strcmp(label, ACCEL_LABEL) != 0) continue;
+        snprintf(g_accel_dir, sizeof g_accel_dir, "/sys/bus/iio/devices/%.40s", e->d_name);
+        break;
+    }
+    closedir(dir);
+}
+
+static int accel_read_raw(const char *axis, long *out) {
+    char path[224];
+    snprintf(path, sizeof path, "%.160s/in_accel_%s_raw", g_accel_dir, axis);
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    long v;
+    int ok = (fscanf(f, "%ld", &v) == 1);
+    fclose(f);
+    if (!ok) return -1;
+    *out = v;
+    return 0;
+}
+
+/* Called from the event loop. Cheap: two small sysfs reads, and only
+ * every ACCEL_POLL_MS rather than every wakeup. */
+#define ACCEL_POLL_MS  250
+#define ACCEL_SETTLE   3        /* ~750ms held before the screen turns */
+
+static void accel_poll(void) {
+    static struct accel_debounce deb;
+    static uint32_t last;
+    if (!g_autorotate || !g_accel_dir[0] || !g_ctx) return;
+
+    uint32_t now = lv_tick_get();
+    if (last && (uint32_t)(now - last) < ACCEL_POLL_MS) return;
+    last = now ? now : 1;
+
+    long ax, ay;
+    if (accel_read_raw("x", &ax) != 0 || accel_read_raw("y", &ay) != 0) return;
+
+    int want = accel_orientation(ax, ay, g_ctx->rot);
+    if (accel_settled(&deb, want, g_ctx->rot, ACCEL_SETTLE)) {
+        fprintf(stderr, "nightfall: auto-rotate %d -> %d (accel x=%ld y=%ld)\n",
+                g_ctx->rot, want, ax, ay);
+        apply_rotation(want);
+    }
+}
+
 static void apply_rotation(int rot) {
     if (!g_ctx) return;
     if (rot == g_ctx->rot) return;
@@ -2815,6 +2894,23 @@ int main(int argc, char **argv) {
     };
 
     g_ctx = &ctx;
+
+    /* Auto-rotate is opt-out rather than opt-in, but silently inert when
+     * the kernel has no accelerometer - which is every picker kernel
+     * built before the cros-ec IIO chain landed, and Nightfall has to
+     * stay exactly as usable on those. */
+    g_autorotate = 1;
+    {
+        const char *ar = getenv("NIGHTFALL_AUTOROTATE");
+        if (ar && (!strcmp(ar, "0") || !strcmp(ar, "off"))) g_autorotate = 0;
+    }
+    if (g_autorotate) {
+        accel_find();
+        if (g_accel_dir[0])
+            fprintf(stderr, "nightfall: auto-rotate using %s\n", g_accel_dir);
+        else
+            fprintf(stderr, "nightfall: no display accelerometer - rotation stays at %d\n", rot);
+    }
     /* Directory must already exist - picker does not create it, so a
      * typo'd path fails loudly at the first dump rather than silently
      * scattering files somewhere unexpected. */
@@ -2899,6 +2995,15 @@ int main(int argc, char **argv) {
 
         int pr = poll(fds, nfds, POLL_PERIOD_MS);
         if (pr < 0 && errno != EINTR) break;
+
+        /* Auto-rotate. Polled here rather than given its own fd: the
+         * loop already wakes every POLL_PERIOD_MS for touch, and
+         * accel_poll() rate-limits itself to a quarter second, so this
+         * costs two small sysfs reads a few times a second. IIO can do
+         * triggered capture with a ring buffer, which would be the right
+         * answer for motion tracking and is wildly disproportionate for
+         * noticing that someone turned the tablet over. */
+        accel_poll();
 
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);

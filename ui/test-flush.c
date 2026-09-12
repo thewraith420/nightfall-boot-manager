@@ -133,6 +133,43 @@ int main(void) {
         ck(all, "the four cases map onto the four rotations, one each");
     }
 
+    /* ---- auto-rotate: reading the sensor out of sysfs ---- */
+    {
+        /* A fake IIO device, so the read path is exercised without a
+         * kernel that has the cros-ec chain - which is what every
+         * machine except the Slate looks like. */
+        char dir[] = "/tmp/nf-accel-XXXXXX";
+        if (mkdtemp(dir)) {
+            char p1[256]; FILE *f;
+            snprintf(p1, sizeof p1, "%s/in_accel_x_raw", dir);
+            f = fopen(p1, "w"); if (f) { fprintf(f, "-7363\n"); fclose(f); }
+            snprintf(p1, sizeof p1, "%s/in_accel_y_raw", dir);
+            f = fopen(p1, "w"); if (f) { fprintf(f, "459\n"); fclose(f); }
+
+            setenv("NIGHTFALL_ACCEL", dir, 1);
+            g_accel_dir[0] = '\0';
+            accel_find();
+            ck(!strcmp(g_accel_dir, dir), "NIGHTFALL_ACCEL overrides device discovery");
+
+            long ax = 0, ay = 0;
+            ck(accel_read_raw("x", &ax) == 0 && ax == -7363, "reads in_accel_x_raw");
+            ck(accel_read_raw("y", &ay) == 0 && ay == 459, "reads in_accel_y_raw");
+            /* End to end: the real recorded reading through the real
+             * read path lands on the orientation Bob confirmed. */
+            ck(accel_orientation(ax, ay, ROT_0) == ROT_270,
+               "the recorded portrait reading maps to ROT_270 end to end");
+
+            long miss = 0;
+            ck(accel_read_raw("z", &miss) != 0, "a missing channel fails rather than returning junk");
+
+            snprintf(p1, sizeof p1, "%s/in_accel_x_raw", dir); unlink(p1);
+            snprintf(p1, sizeof p1, "%s/in_accel_y_raw", dir); unlink(p1);
+            rmdir(dir);
+            unsetenv("NIGHTFALL_ACCEL");
+            g_accel_dir[0] = '\0';
+        }
+    }
+
     /* ---- auto-rotate: the debounce ---- */
     {
         struct accel_debounce d = {0, 0};
