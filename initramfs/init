@@ -114,6 +114,34 @@ save_log() {
         echo "initrd=${SELECTED_INITRD:-}"
         echo "cmdline=${SELECTED_CMDLINE:-}"
         echo
+        # The display accelerometer, for auto-rotate. Logged rather than
+        # acted on: the mapping from sensor axes to screen orientation
+        # depends on how the chip is mounted relative to the panel, and
+        # that takes one observation on the real tablet rather than any
+        # amount of reasoning. Held upright LANDSCAPE is ROT_0 and
+        # upright PORTRAIT is ROT_270 (Bob, confirmed), so a reading
+        # taken in a known orientation pins the whole table.
+        #
+        # Silent when there is no sensor, so this costs nothing on a
+        # kernel without the cros-ec IIO chain - which is every picker
+        # kernel before 2026-09-12.
+        echo "--- display accelerometer (auto-rotate calibration) ---"
+        _accel_found=
+        for _d in /sys/bus/iio/devices/iio:device*; do
+            [ -e "$_d/name" ] || continue
+            _n=$(cat "$_d/name" 2>/dev/null)
+            _l=$(cat "$_d/label" 2>/dev/null || echo "")
+            echo "  $_d name=$_n label=$_l"
+            case "$_n" in
+              *accel*)
+                _accel_found=1
+                for _c in in_accel_x_raw in_accel_y_raw in_accel_z_raw in_accel_scale; do
+                    [ -e "$_d/$_c" ] && echo "    $_c=$(cat "$_d/$_c" 2>/dev/null)"
+                done ;;
+            esac
+        done
+        [ -n "$_accel_found" ] || echo "  (no accelerometer - kernel lacks the cros-ec IIO chain)"
+        echo
         # If picker never drew anything, the reason is usually that one
         # of these is simply absent - which is instant to see here and
         # near-impossible to guess at from a blank screen.
