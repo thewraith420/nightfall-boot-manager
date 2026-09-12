@@ -1,9 +1,15 @@
 # docs
 
-Hardware findings, design decisions, and session logs go here as the project
-progresses - mirroring how the BobZKernel/pixel-slate work kept handoff docs
-for anything worth a permanent record (root causes found, decisions made and
-why, dead ends ruled out).
+- **`screenshots/`** - renders of the real UI, regenerated from the code
+  rather than photographed, plus two phone photos from the night the boot
+  chain first worked end to end. See the main README for how they are
+  produced.
+- **`nocturne-grub.cfg`** - the Slate's real 25-entry GRUB config, kept as a
+  regression fixture. `discover-kernels.sh` is tested against it because two
+  of its bugs were only ever going to show up against a real one: nested
+  `menuentry` stanzas inside "Advanced options", and several menu entries
+  sharing a single kernel image.
 
-Nothing here yet. The hardware facts gathered so far are still small enough
-to live in the main README; split them out here once that section grows.
+Hardware findings and the reasoning behind decisions live in the README of
+whichever directory they belong to, rather than being collected here - they
+are far more likely to be read next to the code they explain.

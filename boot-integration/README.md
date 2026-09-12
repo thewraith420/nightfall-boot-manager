@@ -3,15 +3,22 @@
 Two things live here:
 
 1. **The GRUB entry** (`grub-nightfall-entry.cfg`) - the only GRUB-facing
-   piece of the whole project, no other changes to GRUB itself. Not made
-   the default/only boot path until the picker has proven itself (Bob's
-   call - see the file's own comments for the rollout plan): lands first
-   as a plain selectable entry alongside GRUB's normal menu/timeout,
-   only later flipped to `GRUB_DEFAULT=picker`/`GRUB_TIMEOUT=0` once
-   reliable. Sets `--id picker` so `initramfs/discover-kernels.sh` can
-   exclude it from the list it hands to the touch menu. Paths are
-   placeholders until `picker-kernel`/`initramfs` build outputs land
-   somewhere real under `/boot`.
+   piece of the whole project, no other changes to GRUB itself. Sets
+   `--id nightfall` so `initramfs/discover-kernels.sh` can exclude it
+   from the list it hands to the touch menu, and so `GRUB_DEFAULT` can
+   name it.
+
+   **Nightfall is now the default entry** (`GRUB_DEFAULT=nightfall`),
+   with `GRUB_TIMEOUT` deliberately left non-zero so GRUB's own menu
+   still appears. That was earned rather than assumed: it landed first
+   as a plain selectable entry, and only became the default once the
+   fallback chain and the auto-boot timeout had each demonstrated
+   themselves repeatedly on hardware.
+
+   Whether it is the default is decided by `GRUB_DEFAULT` in
+   `/etc/default/grub`, **not** by anything written here - the comment
+   the installer puts in `custom.cfg` says exactly that, having once
+   said the confident opposite.
 2. **The kexec glue** (`kexec-boot.sh`): given a selected real kernel's
    linux/initrd paths (as they appear in `grub.cfg`) and cmdline, from
    `initramfs/discover-kernels.sh` via `initramfs/init`, runs `kexec -l`

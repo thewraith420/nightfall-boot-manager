@@ -4,11 +4,14 @@ A touch-driven boot manager for the Google Pixel Slate (`nocturne`), TWRP-style 
 replacing GRUB's mouse/keyboard-only menu with something you can actually use
 on a tablet with no keyboard attached.
 
-**Status: working end-to-end on real hardware.** Tap a kernel, confirm, and it
-`kexec`s straight into it. Confirmed on the Slate: touch selection, screen
-rotation, editing and persisting per-kernel command lines, installing and
-removing kernels, and backing the whole system up to an external drive. It is
-the machine's default GRUB entry.
+**Status: working end-to-end on real hardware, with nothing left unexercised.**
+Tap a kernel, confirm, and it `kexec`s straight into it. Every path has now run
+on the actual machine: touch selection, **auto-rotation in all four
+orientations**, editing and persisting per-kernel command lines, installing and
+removing kernels, backing the whole system up to an external drive **and
+restoring from it**, naming/renaming/deleting those backups, a **Repair menu**
+that replaces Ubuntu's keyboard-only recovery mode, and Restart / Power off. It
+is the machine's default GRUB entry.
 
 > Renamed from `nocturne-boot-picker` on 2026-09-09. It started as a picker and
 > outgrew the word: it installs kernels, removes them, edits and remembers their
@@ -101,9 +104,10 @@ device: it is the reason a broken touchscreen cannot strand you.
 
 <img src="docs/screenshots/08-backup-progress.png" width="24%"> <img src="docs/screenshots/04-remove-list.png" width="24%"> <img src="docs/screenshots/10-confirm-dialog.png" width="24%"> <img src="docs/screenshots/11-edit-dialog.png" width="24%">
 
-*Top: the main menu, installed kernels, the backup menu, and backups found on
-the drive. Bottom: a backup in progress, kernels available to remove, the boot
-confirm dialog, and Edit's on-screen keyboard.*
+*Top: the main menu, installed kernels, the backup menu (back up, restore,
+rename, delete), and backups found on the drive. Bottom: a backup in progress,
+kernels available to remove, the boot confirm dialog, and Edit's on-screen
+keyboard.*
 
 These are real renders of the current code, not mockups:
 `ui/render-screens.c` includes `nightfall.c` and calls the same `build_ui()` /
@@ -236,15 +240,39 @@ by deliberately reintroducing the original defect and checking the suite goes
 red, not merely by watching it pass.
 
 ```sh
-bash initramfs/test-init.sh   # runs the REAL init against mocks: the fallback
-                              # chain, rescue paths, diagnostics, device waits.
-                              # Runs twice - dash+coreutils, then busybox with
-                              # the host PATH removed, since busybox is what
-                              # the initramfs actually uses.
+# The REAL init against mocks: fallback chain, rescue paths, diagnostics,
+# device waits, restart/power-off. Runs TWICE - dash+coreutils, then busybox
+# with the host PATH removed, since busybox is what the initramfs uses.
+bash initramfs/test-init.sh
 
-cd ui && make test            # headless LVGL: keyboard z-order, dialog and
-                              # keyboard layout, the 2x2 confirm grid shape.
+# One suite per operation, mostly refusals - and the refusals check that
+# nothing was changed, not merely that it said no.
+bash initramfs/test-backup.sh          # space checks, partial-archive cleanup,
+                                       # orphan sweep, name validation
+bash initramfs/test-restore.sh         # ordering, fstab correction, and that
+                                       # the self-exclusions really exclude
+bash initramfs/test-remove-backup.sh
+bash initramfs/test-rename-backup.sh   # the three-step ordering, so an
+                                       # interruption never strands an archive
+bash initramfs/test-remove-kernel.sh
+bash initramfs/test-fsck-root.sh       # unmount/remount, e2fsck's exit bitmask
+bash initramfs/test-repair.sh          # dpkg/clean/grub, and clearing overrides
+bash initramfs/test-cmdline.sh
+bash initramfs/test-discover-kernels.sh
+
+# Headless LVGL: keyboard z-order, dialog and keyboard layout, the 2x2 confirm
+# grid, child-process plumbing, flush-vs-touch rotation agreement, and the
+# accelerometer mapping.
+cd ui && make test
 ```
+
+Roughly 440 assertions (294 shell, 146 headless LVGL), all of which also pass
+on the Slate itself — which
+matters more than it sounds: Ubuntu builds busybox with
+`FEATURE_SH_STANDALONE`, so applets resolve from busybox's own table before
+`PATH` is consulted and a `PATH` mock is silently bypassed. Debian's build is
+not, so a suite can pass on the build laptop and fail on the device. It has
+happened twice; both times the fix was shadowing with shell functions.
 
 `build-initramfs.sh` also runs `verify-initramfs.sh` automatically, which
 checks the things that otherwise surface only as a bare kernel panic: `/init`
@@ -339,12 +367,39 @@ Each directory has its own README with the reasoning behind what is in it.
 
 ## Recovery
 
-The picker is now the default GRUB entry, with GRUB's own timeout left in
-place. If anything in the chain misbehaves, `init` falls back to booting the
-first discovered kernel rather than stranding you, and `picker`'s own timeout
-does the same if the display or touch fails. A long power-button press is the
-hard reset. `install-nightfall.sh --uninstall` removes the picker entirely and
-touches nothing else.
+Nightfall is the default GRUB entry, with GRUB's own timeout left in place. If
+anything in the chain misbehaves, `init` falls back to booting the first
+discovered kernel rather than stranding you, and Nightfall's own timeout does
+the same if the display or touch fails. A long power-button press is the hard
+reset. `install-nightfall.sh --uninstall` removes it entirely and touches
+nothing else.
+
+**The Repair menu** replaces Ubuntu's recovery mode, which on this machine is a
+dead end: it is an ncurses menu, and the tablet has no keyboard. So the boot
+dialog deliberately does *not* offer a Recovery button — GRUB still lists the
+recovery entries, which is the normal way in when a keyboard is attached.
+
+| Repair action | Notes |
+|---|---|
+| Check the filesystem | `e2fsck` with the root **unmounted** |
+| Full repair | the same, answering yes — for when nothing boots |
+| Repair packages | `dpkg --configure -a` plus an offline dependency fix |
+| Free disk space | package cache and journal; never removes kernels |
+| Update the boot menu | `update-grub` |
+| Clear saved settings | forgets Nightfall's own default and command lines |
+
+The filesystem check is the one that is *better* here than in real recovery
+mode, and structurally rather than cleverly: recovery mode runs `fsck` with `/`
+still mounted, because recovery mode **is** the system on that disk, and
+`e2fsck` then refuses most repairs. Nightfall lives in the initramfs and needs
+nothing from the root once the menu is drawn, so it unmounts the root entirely
+and hands `e2fsck` a filesystem nobody is touching.
+
+**Restart and Power off** exist because there was otherwise no way to leave
+without booting a kernel — on a keyboardless tablet that meant holding the
+power button. Restart is also the honest answer to "take me to the GRUB menu":
+GRUB handed off long before Nightfall existed, so there is nothing to return
+to. You reboot, and its menu comes up on the way back.
 
 Note that with no keyboard attached, GRUB's menu cannot be navigated off the
 default — so a broken picker image would loop until a keyboard is available.

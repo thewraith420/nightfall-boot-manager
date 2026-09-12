@@ -233,23 +233,52 @@ keyboard - by far the heaviest allocation path, and the one that would
 have hung worst - was verified the same way, including a simulated key
 tap.
 
+## Auto-rotate
+
+Rotation is applied at exactly two points - the flush callback and touch
+input - and LVGL is never told about it (see the file header for why).
+That made runtime rotation nearly free: both read `ctx->rot` every time,
+so nothing caches a stale copy.
+
+Two things were *not* free. A 90 degree turn swaps the logical canvas,
+and `flush_cb` refuses to draw when the canvas does not match the
+framebuffer for the current rotation - so the resolution has to move in
+the same breath as `ctx->rot`, or the screen goes black. And the draw
+buffer was sized `cw*64*4` for the *current* width, which a turn from
+2000 to 3000 would have left too small; it is now sized for the larger
+dimension once, so rotation never reallocates.
+
+Calibration is measured, not assumed. Held upright **portrait**:
+`x=-7363 y=459 z=2537` -> `-X` down -> `ROT_270`. Held upright
+**landscape**: `x=5 y=7098 z=3445` -> `+Y` down -> `ROT_0`. The other
+two follow by opposition. `x=5` in landscape also confirms the sensor
+axes are cleanly panel-aligned. Scale is **~7800 counts per g, not
+~1024** - the original guess made the flat threshold a 1.5 degree tilt,
+sensitive enough to flip orientation on noise from a tablet sitting
+still on a desk.
+
+Polled from the existing event loop (which already wakes every 30ms for
+touch) at 250ms, needing 3 consecutive readings to settle - about
+750ms held before the screen turns, because turning a tablet passes
+through orientations you did not mean. Silently inert with no
+accelerometer; `NIGHTFALL_AUTOROTATE=0` disables it outright.
+
+*The bug worth remembering:* display rotated perfectly and touch was
+wrong. The touch call site passed the **startup** rotation while passing
+`ctx`'s **updated** `cw`/`ch`. The fix was not the one-word correction
+but renaming the local to `initial_rot` - so anything reaching for a
+bare `rot` fails to compile rather than silently taking a stale copy.
+
 ## Real-hardware results so far
 
 Confirmed on the Slate: DRM master + i915 modeset work through LVGL's
-render path; `NIGHTFALL_ROTATE=270` is the correct upright orientation;
-the `VT_SETMODE` fix works (no repeat of the Ctrl+Alt+F1 hang); and
-**touch works** - tapping a row opens the confirm dialog naming that
-same entry (verified by Bob on-device after the `event2`/multitouch
-selection fix).
-
-## Still needed, on real hardware
-
-Confirm the resized/re-fonted UI actually reads well on the panel
-(sizes above are computed from the real DPI and verified in a harness,
-but nobody has looked at the new build on the actual screen yet);
-confirm the on-screen keyboard is usable by finger at this size;
-confirm the 10s auto-boot timeout doesn't false-trigger during normal
-use.
+render path; the `VT_SETMODE` fix works (no repeat of the Ctrl+Alt+F1
+hang); **touch works** (after the `event2`/multitouch selection fix);
+the on-screen keyboard is usable by finger and drives both cmdline
+editing and backup naming; the resized/re-fonted UI reads well on the
+panel; and **auto-rotate works in all four orientations**, display and
+touch, with the portrait-designed screens reading fine in landscape
+without redesign.
 
 ## Input contract with `initramfs/`
 

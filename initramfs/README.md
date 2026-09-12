@@ -4,7 +4,20 @@ The root filesystem the picker kernel boots into: just enough userspace to
 bring up the display, read touch input, render the menu, and call `kexec -e`
 on selection.
 
-**In place:**
+**In place** (each script has its own guards and its own test suite -
+`test-init.sh`, `test-backup.sh`, `test-restore.sh`, `test-remove-backup.sh`,
+`test-rename-backup.sh`, `test-remove-kernel.sh`, `test-fsck-root.sh`,
+`test-repair.sh`, `test-cmdline.sh`, `test-discover-kernels.sh`):
+
+- **Backups**: `backup-system.sh` (tar via the target's own GNU tar, source
+  stays read-only), `restore-system.sh` (extracts over, never wipes),
+  `remove-backup.sh`, `rename-backup.sh`, `discover-backups.sh`,
+  `scan-drives.sh`.
+- **Repair**: `fsck-root.sh` (unmounts the root, so `e2fsck` can actually
+  repair), `repair-system.sh` (`dpkg`/`clean`/`grub`), `clear-overrides.sh`.
+- **Kernels**: `install-kernel.sh`, `remove-kernel.sh`, `discover-kernels.sh`,
+  `discover-tarballs.sh`, `apply-default.sh`, `apply-cmdline.sh`.
+
 - `init` - PID 1: mounts `/proc` `/sys` `/dev`, mounts the real root
   partition (`/dev/mmcblk0p2`, ext4 - confirmed on hardware, no separate
   `/boot` mount, no LABEL) read-only, runs discovery against
@@ -259,7 +272,26 @@ not a module (`=m`):
 | finding the root partition at all | `MMC_SDHCI_PCI`, `MMC_BLOCK`, `EXT4_FS` |
 | drawing anything | `DRM`, `DRM_I915` |
 | touch | `I2C_HID`, `I2C_HID_ACPI`, `HID_MULTITOUCH`, `INPUT_EVDEV` |
+| backing up to a USB drive | `SCSI`, `BLK_DEV_SD`, `USB_STORAGE`, `USB_UAS`, `VFAT_FS`, `EXFAT_FS`, `NTFS3_FS`, `NLS_UTF8` |
+| auto-rotate | `MFD_CROS_EC_DEV`, `CROS_EC_SENSORHUB`, `IIO`, `IIO_BUFFER`, `IIO_TRIGGERED_BUFFER`, `IIO_CROS_EC_SENSORS_CORE`, `IIO_CROS_EC_SENSORS` |
 | the entire point | `KEXEC` |
+
+**This has bitten twice, in opposite directions, and both times the
+symptom was silence.** Touch was dead because the leaf drivers were `=y`
+while `MFD_INTEL_LPSS*` was `=m` - so the i2c bus itself never existed
+and there was nothing for the touch drivers to bind to. Auto-rotate was
+the mirror image: `cros_ec_lpcs` bound fine and logged "Chrome EC device
+registered", but everything downstream of it was absent, so no
+accelerometer ever appeared. **Check the whole chain, not the leaf.**
+
+The picker kernel now has `IKCONFIG`, so this is answerable directly
+rather than inferred from `dmesg`:
+
+```sh
+zcat /proc/config.gz | grep CONFIG_IIO_CROS_EC_SENSORS
+# or, against a staged image without booting it:
+extract-ikconfig vmlinuz-*-BobZKernel-picker | grep ...
+```
 
 Verified against BobZKernel's `configs/config-7.1-picker`
 (`picker-kernel` branch): all of the above are `=y` there, so the two
