@@ -178,7 +178,9 @@ cat >> "$CUSTOM_CFG" <<EOF
 $BEGIN_MARK
 # Added by nightfall-boot-manager/boot-integration/install-nightfall.sh
 # Remove this block (or run install-nightfall.sh --uninstall) to undo.
-# Deliberately NOT the default entry: select it from the GRUB menu.
+# This entry's id is 'nightfall'. Whether it is the DEFAULT is decided
+# by GRUB_DEFAULT in /etc/default/grub, not here: set it to 'nightfall'
+# to boot this without touching the menu, or to 0 for the first entry.
 menuentry 'Nightfall (touch)' --id nightfall {
         insmod gzio
         insmod part_gpt
