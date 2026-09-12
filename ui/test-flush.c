@@ -93,31 +93,41 @@ int main(void) {
     {
         const int keep = ROT_90;   /* stand-in for "current orientation" */
 
+        /* Counts, not g. Measured on the Slate: 1g is about 7800 here,
+         * from a real reading of x=-7363 y=459 z=2537 held upright
+         * portrait. Values below are that scale, so they mean something
+         * physical rather than being round numbers. */
+        const long G = 7800;
+
         /* Lying flat: neither axis means anything, so nothing changes.
          * Without this a tablet on a desk flickers between orientations
          * on sensor noise alone. */
         ck(accel_orientation(0, 0, keep) == keep, "flat on a table keeps the current rotation");
-        ck(accel_orientation(150, -150, keep) == keep, "just under the tilt threshold: no change");
+        ck(accel_orientation(G/6, -G/6, keep) == keep, "a 10 degree tilt is still too flat to act on");
 
         /* The dominant axis decides. */
-        ck(accel_orientation(0, 900, keep) == ACCEL_ROT[0], "+Y down picks entry 0");
-        ck(accel_orientation(0, -900, keep) == ACCEL_ROT[1], "-Y down picks entry 1");
-        ck(accel_orientation(900, 0, keep) == ACCEL_ROT[2], "+X down picks entry 2");
-        ck(accel_orientation(-900, 0, keep) == ACCEL_ROT[3], "-X down picks entry 3");
+        ck(accel_orientation(0, G, keep) == ACCEL_ROT[0], "+Y down picks entry 0");
+        ck(accel_orientation(0, -G, keep) == ACCEL_ROT[1], "-Y down picks entry 1");
+        ck(accel_orientation(G, 0, keep) == ACCEL_ROT[2], "+X down picks entry 2");
+        ck(accel_orientation(-G, 0, keep) == ACCEL_ROT[3], "-X down picks entry 3");
+
+        /* The real measurement, as recorded: held upright portrait. */
+        ck(accel_orientation(-7363, 459, keep) == ROT_270,
+           "the measured upright-portrait reading resolves to ROT_270");
 
         /* Mixed tilt goes with the larger component, and the boundary is
          * decided rather than left to chance. */
-        ck(accel_orientation(300, 900, keep) == ACCEL_ROT[0], "mostly +Y wins over some +X");
-        ck(accel_orientation(900, 300, keep) == ACCEL_ROT[2], "mostly +X wins over some +Y");
-        ck(accel_orientation(700, 700, keep) == ACCEL_ROT[0], "an exact 45 degrees resolves to Y, not undefined");
+        ck(accel_orientation(G/3, G, keep) == ACCEL_ROT[0], "mostly +Y wins over some +X");
+        ck(accel_orientation(G, G/3, keep) == ACCEL_ROT[2], "mostly +X wins over some +Y");
+        ck(accel_orientation(G, G, keep) == ACCEL_ROT[0], "an exact 45 degrees resolves to Y, not undefined");
 
         /* Every orientation must be reachable, or one edge of the tablet
          * silently never works. */
         int seen[4] = {0,0,0,0};
-        seen[accel_orientation(0, 900, keep)]++;
-        seen[accel_orientation(0, -900, keep)]++;
-        seen[accel_orientation(900, 0, keep)]++;
-        seen[accel_orientation(-900, 0, keep)]++;
+        seen[accel_orientation(0, G, keep)]++;
+        seen[accel_orientation(0, -G, keep)]++;
+        seen[accel_orientation(G, 0, keep)]++;
+        seen[accel_orientation(-G, 0, keep)]++;
         int all = 1;
         for (int i2 = 0; i2 < 4; i2++) if (seen[i2] != 1) all = 0;
         ck(all, "the four cases map onto the four rotations, one each");

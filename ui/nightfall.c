@@ -747,12 +747,40 @@ static struct nightfall_ctx *g_ctx;
  * editing this table rather than unpicking logic.
  *
  * Index: 0 = +Y down, 1 = -Y down, 2 = +X down, 3 = -X down. */
-static const int ACCEL_ROT[4] = { ROT_270, ROT_90, ROT_0, ROT_180 };
+static const int ACCEL_ROT[4] = { ROT_0, ROT_180, ROT_90, ROT_270 };
+/* Where each entry comes from, so the next person knows which are
+ * measured and which are inferred:
+ *
+ *   [3] -X down -> ROT_270   MEASURED. Held upright portrait on the
+ *                            Slate: x=-7363 y=459 z=2537. Bob confirms
+ *                            270 is upright portrait.
+ *   [2] +X down -> ROT_90    DERIVED, and safe: +X is the opposite of
+ *                            -X, so it must be the opposite rotation,
+ *                            270 + 180 = 90.
+ *   [0] +Y down -> ROT_0     UNVERIFIED. Bob confirms 0 is upright
+ *   [1] -Y down -> ROT_180   landscape, so one of these two is ROT_0
+ *                            and the other ROT_180 - but WHICH depends
+ *                            on the handedness of the sensor relative
+ *                            to the panel, and a single reading cannot
+ *                            tell. One boot held upright LANDSCAPE
+ *                            settles it: if x is then near zero and y
+ *                            is strongly positive, this is right; if y
+ *                            is strongly negative, swap [0] and [1].
+ *
+ * Getting the Y pair backwards is not subtle in use - landscape would
+ * come up upside down - so it will be obvious rather than silent. */
 
 /* Below this, the device is lying too flat for X/Y to mean anything and
- * the current orientation is kept. In raw counts; cros-ec-accel reports
- * roughly 1g ~ 1024, so this is about a 12 degree tilt. */
-#define ACCEL_FLAT 200
+ * the current orientation is kept.
+ *
+ * In raw counts, and MEASURED rather than assumed: a reading taken on
+ * the Slate held upright portrait was x=-7363 y=459 z=2537, magnitude
+ * 7801, so 1g is about 7800 counts here - not the ~1024 originally
+ * guessed. At that scale a threshold of 200 would have been a 1.5
+ * degree tilt, sensitive enough to flip orientation on sensor noise
+ * alone. 2000 counts is about 15 degrees off flat, which a tablet
+ * exceeds the moment it is picked up. */
+#define ACCEL_FLAT 2000
 
 /* Orientation implied by one reading, or `fallback` when it is too flat
  * to say. Pure function of its inputs - all the testing lives here. */
