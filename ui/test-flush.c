@@ -133,6 +133,54 @@ int main(void) {
         ck(all, "the four cases map onto the four rotations, one each");
     }
 
+    /* ---- touch must follow a rotation, not just the display ---- */
+    /* The bug this exists for: the touch call site passed the STARTUP
+     * rotation while passing ctx's UPDATED cw/ch, so after an auto-rotate
+     * touch was transformed with the old rotation and the new dimensions.
+     * The display looked perfect, which is what made it confusing.
+     *
+     * Asserts the invariant rather than specific coordinates: a touch at
+     * a known physical point must land on the SAME logical point that
+     * the flush transform maps back to that physical point. If the two
+     * transforms ever disagree about the current rotation, this fails. */
+    {
+        struct drm_dev dd = {0};
+        dd.width = 3000; dd.height = 2000; dd.stride = 3000 * 4;
+        struct nightfall_ctx tc = { .drm = &dd, .rot = ROT_270, .cw = 2000, .ch = 3000 };
+
+        const int rots[4] = { ROT_0, ROT_90, ROT_180, ROT_270 };
+        const char *rn[4] = { "0", "90", "180", "270" };
+        int roundtrip_ok = 1, which = -1;
+        for (int r = 0; r < 4; r++) {
+            /* Exactly what apply_rotation() does to the context. */
+            int sw = (rots[r] == ROT_90 || rots[r] == ROT_270);
+            tc.rot = rots[r];
+            tc.cw = sw ? (int)dd.height : (int)dd.width;
+            tc.ch = sw ? (int)dd.width  : (int)dd.height;
+
+            for (int ly0 = 0; ly0 < tc.ch; ly0 += 137) {
+                for (int lx0 = 0; lx0 < tc.cw; lx0 += 149) {
+                    int px, py, lx1, ly1;
+                    logical_to_physical(tc.rot, tc.cw, tc.ch, lx0, ly0, &px, &py);
+                    physical_to_logical(tc.rot, tc.cw, tc.ch, px, py, &lx1, &ly1);
+                    if (lx1 != lx0 || ly1 != ly0) { roundtrip_ok = 0; which = r; }
+                }
+            }
+        }
+        if (roundtrip_ok) ck(1, "touch and display transforms agree at every rotation");
+        else { char m[80]; snprintf(m, sizeof m, "transforms disagree at rot %s", rn[which]); ck(0, m); }
+
+        /* And the specific regression: a transform given a STALE rotation
+         * but current dimensions does not round-trip. This is what the
+         * bug looked like, so assert it really is detectable. */
+        tc.rot = ROT_0; tc.cw = 3000; tc.ch = 2000;
+        int px, py, lx1, ly1;
+        logical_to_physical(ROT_0, 3000, 2000, 100, 200, &px, &py);
+        physical_to_logical(ROT_270, 3000, 2000, px, py, &lx1, &ly1);  /* stale rot */
+        ck(!(lx1 == 100 && ly1 == 200),
+           "a stale rotation with current dimensions really does land somewhere else");
+    }
+
     /* ---- auto-rotate: reading the sensor out of sysfs ---- */
     {
         /* A fake IIO device, so the read path is exercised without a

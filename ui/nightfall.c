@@ -2885,12 +2885,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int rot = parse_rotation();
+    /* Named initial_rot deliberately. It is only correct until the first
+     * auto-rotate, and the live value lives in ctx.rot - so anything
+     * reaching for a bare "rot" later now fails to compile instead of
+     * silently using a stale one. That is the bug this had. */
+    int initial_rot = parse_rotation();
     struct nightfall_ctx ctx = {
         .drm = &drm,
-        .rot = rot,
-        .cw = (rot == ROT_90 || rot == ROT_270) ? (int)drm.height : (int)drm.width,
-        .ch = (rot == ROT_90 || rot == ROT_270) ? (int)drm.width : (int)drm.height,
+        .rot = initial_rot,
+        .cw = (initial_rot == ROT_90 || initial_rot == ROT_270) ? (int)drm.height : (int)drm.width,
+        .ch = (initial_rot == ROT_90 || initial_rot == ROT_270) ? (int)drm.width : (int)drm.height,
     };
 
     g_ctx = &ctx;
@@ -2909,7 +2913,7 @@ int main(int argc, char **argv) {
         if (g_accel_dir[0])
             fprintf(stderr, "nightfall: auto-rotate using %s\n", g_accel_dir);
         else
-            fprintf(stderr, "nightfall: no display accelerometer - rotation stays at %d\n", rot);
+            fprintf(stderr, "nightfall: no display accelerometer - rotation stays at %d\n", initial_rot);
     }
     /* Directory must already exist - picker does not create it, so a
      * typo'd path fails loudly at the first dump rather than silently
@@ -3083,7 +3087,14 @@ int main(int argc, char **argv) {
                     }
                     if (last_raw_x >= 0 && last_raw_y >= 0) {
                         int lx, ly;
-                        touch_to_logical(&touch, rot, ctx.cw, ctx.ch, drm.width, drm.height,
+                        /* ctx.rot, NOT the startup value: auto-rotate
+                         * changes it, and this passed the stale local
+                         * while passing ctx's UPDATED cw/ch - so after a
+                         * turn, touch was transformed with the old
+                         * rotation and the new dimensions. Display was
+                         * perfect and touch was wrong, which is exactly
+                         * how it presented. */
+                        touch_to_logical(&touch, ctx.rot, ctx.cw, ctx.ch, drm.width, drm.height,
                                           last_raw_x, last_raw_y, &lx, &ly);
                         ctx.touch_x = lx;
                         ctx.touch_y = ly;
