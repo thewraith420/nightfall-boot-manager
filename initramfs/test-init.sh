@@ -183,6 +183,16 @@ else echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'; echo 'SELECTED_INITRD=x'; echo 
 exit 0
 EOF
     ;;
+    envdump) cat > "$SB/bin/nightfall" <<'EOF'
+#!/bin/sh
+echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset}" >&2
+echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
+echo 'SELECTED_INITRD=/boot/initrd.img-chosen'
+echo 'SELECTED_CMDLINE=ro quiet'
+echo 'SELECTED_BY=timeout'
+exit 0
+EOF
+    ;;
     restart)  printf '#!/bin/sh\necho "POWER_ACTION=reboot"\nexit 0\n'   > "$SB/bin/nightfall" ;;
     shutdown) printf '#!/bin/sh\necho "POWER_ACTION=poweroff"\nexit 0\n' > "$SB/bin/nightfall" ;;
   esac
@@ -438,6 +448,43 @@ run
 both | grep -q "NIGHTFALL_TIMEOUT_SECS" && bad "exported a timeout with no file" \
   || ok "no file means Nightfall's compiled default, untouched"
 both | grep -q "MARKER_KEXEC" && ok "and the boot still works" || bad "broke the normal path"
+
+echo "=== 14. starting rotation and auto-rotate are settable from /boot ==="
+# Observed at the one place it matters: what Nightfall is actually handed.
+# Read from nightfall.stderr, NOT init's output: init starts Nightfall with
+# 2>/run/nightfall/nightfall.stderr, so the mock's report lands in that
+# file. Grepping init's own stderr found nothing, which looked exactly like
+# every value being wrong.
+nfe() { cat "$SB/run/nightfall/nightfall.stderr" 2>/dev/null; }
+setup env envdump 0 0; run
+nfe | grep -q "ENV_ROTATE=270 ENV_AUTO=unset" \
+  && ok "no files: 270 and auto-rotate left at Nightfall's default" || bad "defaults wrong: $(nfe | grep ENV_)"
+
+for v in 0 90 180 270; do
+  setup env envdump 0 0; echo "$v" > "$SB/mnt/root/boot/nightfall-rotate"; run
+  nfe | grep -q "ENV_ROTATE=$v " && ok "rotate $v is passed through" || bad "rotate $v not applied: $(nfe | grep ENV_)"
+done
+
+# Garbage must NOT reach Nightfall's parser, which would turn it into 0 -
+# sideways on this panel. The := default has to supply 270 instead.
+for junk in "" "abc" "45" "-90" "270deg" "360" " 90x"; do
+  setup env envdump 0 0; printf '%s\n' "$junk" > "$SB/mnt/root/boot/nightfall-rotate"; run
+  nfe | grep -q "ENV_ROTATE=270 " && ok "rotate '$junk' ignored, 270 kept" || bad "rotate '$junk' leaked: $(nfe | grep ENV_)"
+done
+
+for v in 1 on; do
+  setup env envdump 0 0; echo "$v" > "$SB/mnt/root/boot/nightfall-autorotate"; run
+  nfe | grep -q "ENV_AUTO=1" && ok "autorotate '$v' normalises to 1" || bad "autorotate '$v': $(nfe | grep ENV_)"
+done
+for v in 0 off; do
+  setup env envdump 0 0; echo "$v" > "$SB/mnt/root/boot/nightfall-autorotate"; run
+  nfe | grep -q "ENV_AUTO=0" && ok "autorotate '$v' normalises to 0" || bad "autorotate '$v': $(nfe | grep ENV_)"
+done
+# An unreadable file should not silently pin the rotation.
+for junk in "" "yes" "2" "true"; do
+  setup env envdump 0 0; printf '%s\n' "$junk" > "$SB/mnt/root/boot/nightfall-autorotate"; run
+  nfe | grep -q "ENV_AUTO=unset" && ok "autorotate '$junk' ignored, stays on" || bad "autorotate '$junk' leaked: $(nfe | grep ENV_)"
+done
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"

@@ -325,6 +325,47 @@ default_cmdline=$(printf '%s' "$default_line" | cut -f4)
 # first boot to come up sideways. Same transform drives touch, so an
 # unset value is cosmetic (taps still land on the buttons you see)
 # rather than broken - which is exactly why it could go unnoticed.
+# Starting orientation and auto-rotate, settable from /boot - same
+# pattern and same reasons as nightfall-timeout above.
+#
+# ORDER MATTERS HERE. This runs BEFORE the := default below, so a valid
+# file sets NIGHTFALL_ROTATE and := leaves it alone, while an absent or
+# invalid one leaves it unset and := supplies 270. Nightfall's own parser
+# maps anything that is not exactly 90/180/270 to ROT_0 - a sensible
+# library default and the wrong one for this panel, where 0 is sideways -
+# so garbage must never be passed through to reach it.
+#
+# Lower stakes than the timeout, and deliberately treated that way: a
+# wrong orientation is sideways but still usable, since touch goes
+# through the same transform. Strict parsing and ignore-on-garbage is
+# enough. `read`, not `head | tr` - tr is not an applet in this image.
+ROTATE_FILE=/mnt/root/boot/nightfall-rotate
+AUTOROTATE_FILE=/mnt/root/boot/nightfall-autorotate
+if [ -f "$ROTATE_FILE" ]; then
+    _r=""
+    read -r _r < "$ROTATE_FILE" 2>/dev/null || _r=""
+    case "$_r" in
+        0|90|180|270) NIGHTFALL_ROTATE=$_r
+                      stage "starting rotation ${_r} (from nightfall-rotate)" ;;
+        *)            stage "ignoring $ROTATE_FILE: expected 0, 90, 180 or 270" ;;
+    esac
+fi
+if [ -f "$AUTOROTATE_FILE" ]; then
+    _a=""
+    read -r _a < "$AUTOROTATE_FILE" 2>/dev/null || _a=""
+    case "$_a" in
+        # Normalised to 0/1 on the way out, so Nightfall only ever sees
+        # the two values its own parser is known to handle.
+        1|on)  NIGHTFALL_AUTOROTATE=1; export NIGHTFALL_AUTOROTATE
+               stage "auto-rotate on (from nightfall-autorotate)" ;;
+        0|off) NIGHTFALL_AUTOROTATE=0; export NIGHTFALL_AUTOROTATE
+               stage "auto-rotate off (from nightfall-autorotate)" ;;
+        # Garbage keeps auto-rotate ON, the default. An unreadable file
+        # should not silently pin the rotation.
+        *)     stage "ignoring $AUTOROTATE_FILE: expected 1, 0, on or off" ;;
+    esac
+fi
+
 : "${NIGHTFALL_ROTATE:=270}"
 export NIGHTFALL_ROTATE
 

@@ -232,7 +232,9 @@ on a keyboardless tablet means a tool with a GUI rather than an editor.
 |---|---|
 | `/boot/nightfall-default` | the vmlinuz path "Set Default" remembered |
 | `/boot/nightfall-cmdline` | `<vmlinuz>\t<cmdline>` per-kernel overrides |
-| `/boot/nightfall-timeout` | menu timeout in whole seconds |
+| `/boot/nightfall-timeout` | menu timeout in whole seconds, `0`–`3600` |
+| `/boot/nightfall-rotate` | starting orientation: `0`, `90`, `180` or `270` |
+| `/boot/nightfall-autorotate` | `1`/`on` or `0`/`off` |
 
 `nightfall-timeout` is validated hard, and it is the one where that matters:
 Nightfall treats `0` as *disable the auto-boot entirely*, so a stray newline or
@@ -242,8 +244,17 @@ you from. Digits only, `0`–`3600`; anything else is treated as though the file
 were absent. A deliberate `0` stays legal, because the guard is against garbage
 *becoming* `0`, not against meaning it.
 
-`Repair → Clear Nightfall's saved settings` forgets the first two, and
-`--uninstall` removes all three.
+`nightfall-rotate` is the *starting* orientation: with auto-rotate on and an
+accelerometer present it only matters until the first reading. An invalid value
+is ignored and 270 (upright portrait on the Slate) is kept — it is never passed
+through, because Nightfall's own parser turns anything unexpected into `0`,
+which is sideways on this panel. An invalid `nightfall-autorotate` leaves
+auto-rotate on rather than silently pinning the rotation. These two are
+validated for correctness rather than safety: a wrong orientation is sideways
+but still usable, since touch follows the same transform.
+
+`Repair → Clear Nightfall's saved settings` forgets the default and command
+lines; `--uninstall` removes all five files.
 
 ### Knobs
 
