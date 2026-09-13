@@ -77,7 +77,8 @@ if [ "${1:-}" = "--uninstall" ]; then
             rm -rf "$d"
         fi
     done
-    rm -f "$BOOT"/nightfall-default "$BOOT"/nightfall-cmdline "$BOOT"/nightfall-last-boot.log \
+    rm -f "$BOOT"/nightfall-default "$BOOT"/nightfall-cmdline "$BOOT"/nightfall-timeout \
+          "$BOOT"/nightfall-last-boot.log \
           "$BOOT"/picker-default "$BOOT"/picker-cmdline "$BOOT"/picker-last-boot.log 2>/dev/null || true
     say "done - no grub regeneration was needed, and nothing else was touched"
     exit 0

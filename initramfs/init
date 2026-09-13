@@ -242,6 +242,53 @@ fi
 # passes the list through unchanged.
 DEFAULT_MARKER=/mnt/root/boot/nightfall-default
 CMDLINE_FILE=/mnt/root/boot/nightfall-cmdline
+TIMEOUT_FILE=/mnt/root/boot/nightfall-timeout
+
+# The menu timeout, settable without rebuilding the initramfs.
+#
+# It lives on the real root next to the other things Nightfall
+# remembers, for the same reason they do: an initramfs rebuild replaces
+# every file in the image, so a number baked in there is lost every time
+# the UI changes. On the root it survives, and it can be changed by
+# anything that can write to /boot - which on a keyboardless tablet
+# means a tool with a GUI rather than an editor.
+#
+# VALIDATED HARD, and this is the one knob where that really matters.
+# Nightfall treats 0 as "disable the auto-boot entirely", so a stray
+# newline or a comment turning into 0 would not merely be wrong - it
+# would leave the machine sitting at a menu forever if touch were not
+# working, which is precisely the situation the timeout exists to
+# rescue. So: digits only, nothing else, and anything unexpected is
+# treated as though the file were absent.
+#
+# 0 itself stays legal, because it is a documented choice someone can
+# deliberately make. The guard is against garbage BECOMING 0, not
+# against meaning it.
+if [ -f "$TIMEOUT_FILE" ]; then
+    # `read`, not `head | tr`: tr is NOT one of the applets in this
+    # image, so the strip silently produced nothing and every valid
+    # timeout was rejected as garbage. Caught only by the busybox pass
+    # with the host PATH removed - on the build laptop tr exists and it
+    # looked fine. read is a shell builtin, always there, and strips
+    # surrounding whitespace via IFS for free.
+    _t=""
+    read -r _t < "$TIMEOUT_FILE" 2>/dev/null || _t=""
+    case "$_t" in
+        ''|*[!0-9]*)
+            stage "ignoring $TIMEOUT_FILE: not a plain number" ;;
+        *)
+            # Upper bound as a sanity check rather than a policy: an
+            # hour of waiting is indistinguishable from a hang, and a
+            # value that large is far more likely a typo than intent.
+            if [ "$_t" -le 3600 ]; then
+                NIGHTFALL_TIMEOUT_SECS=$_t
+                export NIGHTFALL_TIMEOUT_SECS
+                stage "menu timeout ${_t}s (from nightfall-timeout)"
+            else
+                stage "ignoring $TIMEOUT_FILE: ${_t}s is out of range"
+            fi ;;
+    esac
+fi
 
 # menu.tsv.raw -> menu.tsv. Shared by the initial build and by
 # refresh_menu after an install, so the two cannot drift apart.

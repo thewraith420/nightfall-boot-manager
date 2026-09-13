@@ -24,7 +24,7 @@
  * never told about rotation at all.
  *
  * Safety net: if nothing is tapped within NIGHTFALL_TIMEOUT_SECS (default
- * 10, 0 disables it), auto-boots the first entry - GRUB's own menu has
+ * 30, 0 disables it), auto-boots the first entry - GRUB's own menu has
  * exactly this timeout-to-default behavior, and a keyboardless device
  * with no escape hatch otherwise has no recovery path if touch ever
  * fails to register. Also cooperates with VT-switch requests

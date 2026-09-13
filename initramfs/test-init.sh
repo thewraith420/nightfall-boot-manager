@@ -404,6 +404,41 @@ both | grep -q "MARKER_POWEROFF" && ok "powers off when asked" || bad "did not p
 both | grep -q "MARKER_REBOOT" && bad "rebooted instead of powering off" || ok "does not confuse the two"
 both | grep -q "MARKER_KEXEC" && bad "booted a kernel instead" || ok "does NOT kexec anything"
 
+echo "=== 13. the menu timeout is settable from /boot, and validated hard ==="
+# The one knob where bad input is dangerous rather than merely wrong:
+# Nightfall treats 0 as "disable auto-boot", so garbage becoming 0 would
+# leave a keyboardless tablet sitting at a menu forever if touch failed.
+setup happy ok 0 0
+echo "45" > "$SB/mnt/root/boot/nightfall-timeout"
+run
+both | grep -q "menu timeout 45s" && ok "a plain number is applied" || bad "timeout not applied"
+
+# Everything below must be treated as though the file were absent.
+for junk in "" "  " "abc" "30s" "-5" "3.5" "# 30" "99999"; do
+  setup happy ok 0 0
+  printf '%s\n' "$junk" > "$SB/mnt/root/boot/nightfall-timeout"
+  run
+  if both | grep -q "NIGHTFALL_TIMEOUT_SECS="; then
+    bad "junk timeout '$junk' was exported anyway"
+  else
+    ok "rejects '$junk'"
+  fi
+done
+
+# Deliberate 0 is legal - it is a documented choice, and the guard is
+# against garbage BECOMING 0, not against meaning it.
+setup happy ok 0 0
+echo "0" > "$SB/mnt/root/boot/nightfall-timeout"
+run
+log | grep -q "menu timeout 0s" && ok "a deliberate 0 is honoured" || bad "0 was rejected"
+
+# Absent file must change nothing at all.
+setup happy ok 0 0
+run
+both | grep -q "NIGHTFALL_TIMEOUT_SECS" && bad "exported a timeout with no file" \
+  || ok "no file means Nightfall's compiled default, untouched"
+both | grep -q "MARKER_KEXEC" && ok "and the boot still works" || bad "broke the normal path"
+
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"
 [ "$fail" -eq 0 ] || exit 1

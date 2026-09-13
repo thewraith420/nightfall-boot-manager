@@ -222,6 +222,29 @@ This exists because a silent fallback is externally indistinguishable from
 "the GRUB selection never took", and one whole boot attempt was lost to
 exactly that ambiguity.
 
+### Settings that live on the real root
+
+These survive an initramfs rebuild, which anything baked into the image
+does not — and they can be changed by anything able to write to `/boot`, which
+on a keyboardless tablet means a tool with a GUI rather than an editor.
+
+| File | Contains |
+|---|---|
+| `/boot/nightfall-default` | the vmlinuz path "Set Default" remembered |
+| `/boot/nightfall-cmdline` | `<vmlinuz>\t<cmdline>` per-kernel overrides |
+| `/boot/nightfall-timeout` | menu timeout in whole seconds |
+
+`nightfall-timeout` is validated hard, and it is the one where that matters:
+Nightfall treats `0` as *disable the auto-boot entirely*, so a stray newline or
+a comment becoming `0` would leave the machine sitting at a menu forever if
+touch were not working — exactly the situation the timeout exists to rescue
+you from. Digits only, `0`–`3600`; anything else is treated as though the file
+were absent. A deliberate `0` stays legal, because the guard is against garbage
+*becoming* `0`, not against meaning it.
+
+`Repair → Clear Nightfall's saved settings` forgets the first two, and
+`--uninstall` removes all three.
+
 ### Knobs
 
 | Variable | Default | What it does |
