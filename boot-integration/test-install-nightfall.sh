@@ -173,6 +173,15 @@ rc=$(run)
 [ "$rc" != 0 ] && ok "refuses nomodeset even when i915 options are present (they mean nothing with KMS off)" \
   || bad "accepted a nomodeset boot because it happened to carry i915 options"
 
+# And `recovery` on its own, WITH i915 options: only the word check
+# refuses it, and only its `recovery` half. Without this case, dropping
+# `recovery` from the pattern while keeping `nomodeset` passed everything.
+fresh_installed
+echo "ro recovery i915.enable_dpcd_backlight=2 i915.enable_psr=0" > "$SB/cmdline"
+rc=$(run)
+[ "$rc" != 0 ] && ok "refuses a recovery boot even when i915 options are present" \
+  || bad "accepted a recovery boot because it happened to carry i915 options"
+
 fresh_installed; echo "ro quiet nomodeset" > "$SB/cmdline"; rc=$(run)
 [ "$rc" != 0 ] && ok "refuses nomodeset on its own" || bad "accepted nomodeset"
 
