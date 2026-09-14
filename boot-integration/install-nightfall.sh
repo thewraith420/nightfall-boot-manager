@@ -118,6 +118,92 @@ case $grub_default in
        echo "  the default on its own - double-check that's what you expect." >&2 ;;
 esac
 
+# -------------------------------------------- decide the display options
+# BEFORE anything is copied into /boot. Everything below can refuse, and
+# refusing after the kernel and initramfs had already been replaced would
+# leave a half-finished install: new images under an entry still carrying
+# the old options. Same rule as everywhere else here - check first, then
+# do the irreversible part.
+
+# The picker kernel needs the same panel quirks every other entry on
+# this machine already carries. Without i915.enable_dpcd_backlight=2 and
+# i915.enable_psr=0 the Slate's panel produces NO VISIBLE OUTPUT - and
+# it fails silently in the worst way: drmModeSetCrtc returns success, so
+# picker's own error handling has nothing to catch. Modeset works, the
+# backlight simply never lights. That cost a boot cycle where the entire
+# chain (root mount, discovery, DRM, touch, render, timeout, kexec) ran
+# perfectly against a black screen.
+#
+# Rather than hardcode the quirks, take them from /proc/cmdline: the
+# running system is BY DEFINITION a working display configuration on
+# this hardware, so whatever makes the panel light up now gets carried
+# to the picker. Only i915.* is copied - root=, quiet, splash and
+# crashkernel belong to the real OS, not to an initramfs that mounts its
+# own root and wants its diagnostics visible.
+#
+# THAT PREMISE HAS TO BE CHECKED, NOT ASSUMED. It holds for a normal boot
+# and fails for exactly the boots someone reinstalls from. A GRUB
+# recovery entry is `ro recovery nomodeset dis_ucode_ldr`: with nomodeset
+# the panel lights by a non-KMS path and /proc/cmdline carries no i915
+# options at all. Reinstalling from there used to write an empty set into
+# Nightfall's entry, and on this panel an empty set is a black screen -
+# with only a note on stderr to say so. Recovery mode is precisely when
+# someone reaches for a reinstall. (Found by the chromebook-linux-fixer
+# session, which refuses the same case before calling this script.)
+#
+# So, unless NIGHTFALL_CMDLINE says explicitly what to use, refuse:
+#   - a boot whose cmdline contains nomodeset or recovery
+#   - no i915 options on this boot while the existing entry has some
+#   - an unreadable /proc/cmdline
+# Still allowed: a first install, a panel that genuinely needs none,
+# fewer options than before (a revert), and any explicit NIGHTFALL_CMDLINE.
+#
+# NIGHTFALL_PROC_CMDLINE is a test seam and nothing else.
+PROC_CMDLINE=${NIGHTFALL_PROC_CMDLINE:-/proc/cmdline}
+override_hint="  If you are sure, say explicitly what to use - note sudo's placement:
+    sudo NIGHTFALL_CMDLINE='i915.enable_dpcd_backlight=2 i915.enable_psr=0' $0 ...
+  (NIGHTFALL_CMDLINE=... sudo ... loses the variable: sudo resets the environment.)"
+
+if [ -n "${NIGHTFALL_CMDLINE+x}" ]; then
+    nightfall_cmdline=$NIGHTFALL_CMDLINE
+    say "using NIGHTFALL_CMDLINE from the environment"
+else
+    [ -r "$PROC_CMDLINE" ] || die "cannot read $PROC_CMDLINE, so the display options for
+  Nightfall's entry cannot be derived.
+$override_hint"
+    running=$(cat "$PROC_CMDLINE")
+    for word in $running; do
+        case "$word" in
+            nomodeset|recovery)
+                die "this boot's command line contains '$word' - a recovery or
+  non-modesetting boot is not a working display configuration for Nightfall,
+  and deriving its options from here would write a set that leaves it dark.
+  Reinstall from a normal boot instead.
+$override_hint" ;;
+        esac
+    done
+    nightfall_cmdline=$(printf '%s\n' $running | grep '^i915\.' | tr '\n' ' ' | sed 's/ *$//')
+
+    if [ -z "$nightfall_cmdline" ] && [ -f "$CUSTOM_CFG" ]; then
+        existing=$(sed -n "/$BEGIN_MARK/,/$END_MARK/p; /$OLD_BEGIN_MARK/,/$OLD_END_MARK/p" "$CUSTOM_CFG" \
+                   | grep -E '^[[:space:]]*linux[[:space:]]' | tr ' \t' '\n\n' | grep '^i915\.' \
+                   | tr '\n' ' ' | sed 's/ *$//')
+        [ -z "$existing" ] || die "this boot has no i915 options, but the current Nightfall
+  entry has: $existing
+  Replacing them with nothing would very likely leave Nightfall dark.
+$override_hint"
+    fi
+fi
+
+if [ -n "$nightfall_cmdline" ]; then
+    say "Nightfall kernel cmdline: $nightfall_cmdline"
+else
+    echo "install-nightfall: note: no i915.* options found in /proc/cmdline, so the" >&2
+    echo "  Nightfall entry gets a bare kernel line. If Nightfall boots to a black" >&2
+    echo "  screen but the boot log shows it ran fine, this is the first suspect:" >&2
+    echo "  set NIGHTFALL_CMDLINE='...' and re-run." >&2
+fi
+
 say "installing into $NIGHTFALL_DIR (invisible to GRUB auto-detection)"
 mkdir -p "$NIGHTFALL_DIR"
 cp "$kernel"    "$NIGHTFALL_DIR/vmlinuz"
@@ -138,37 +224,6 @@ if findmnt -no TARGET --target /boot | grep -qx /boot; then
 else
     kpath=/boot/nightfall/vmlinuz
     ipath=/boot/nightfall/initramfs.img
-fi
-
-# The picker kernel needs the same panel quirks every other entry on
-# this machine already carries. Without i915.enable_dpcd_backlight=2 and
-# i915.enable_psr=0 the Slate's panel produces NO VISIBLE OUTPUT - and
-# it fails silently in the worst way: drmModeSetCrtc returns success, so
-# picker's own error handling has nothing to catch. Modeset works, the
-# backlight simply never lights. That cost a boot cycle where the entire
-# chain (root mount, discovery, DRM, touch, render, timeout, kexec) ran
-# perfectly against a black screen.
-#
-# Rather than hardcode the quirks, take them from /proc/cmdline: the
-# running system is BY DEFINITION a working display configuration on
-# this hardware, so whatever makes the panel light up now gets carried
-# to the picker. Only i915.* is copied - root=, quiet, splash and
-# crashkernel belong to the real OS, not to an initramfs that mounts its
-# own root and wants its diagnostics visible.
-if [ -n "${NIGHTFALL_CMDLINE+x}" ]; then
-    nightfall_cmdline=$NIGHTFALL_CMDLINE
-    say "using NIGHTFALL_CMDLINE from the environment"
-else
-    nightfall_cmdline=$(tr ' ' '\n' < /proc/cmdline | grep '^i915\.' | tr '\n' ' ' | sed 's/ *$//')
-fi
-
-if [ -n "$nightfall_cmdline" ]; then
-    say "Nightfall kernel cmdline: $nightfall_cmdline"
-else
-    echo "install-nightfall: note: no i915.* options found in /proc/cmdline, so the" >&2
-    echo "  Nightfall entry gets a bare kernel line. If Nightfall boots to a black" >&2
-    echo "  screen but the boot log shows it ran fine, this is the first suspect:" >&2
-    echo "  set NIGHTFALL_CMDLINE='...' and re-run." >&2
 fi
 
 say "adding menu entry to $CUSTOM_CFG (no grub regeneration)"

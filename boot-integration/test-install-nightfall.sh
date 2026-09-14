@@ -8,6 +8,7 @@
 # with no keyboard the second one means you quietly stop booting into
 # Nightfall and cannot pick it from the menu.
 set -u
+unset NIGHTFALL_CMDLINE
 S=$(cd "$(dirname "$0")" && pwd)/install-nightfall.sh
 pass=0; fail=0
 ok()  { printf '  \033[32m[ok]\033[0m %s\n' "$*"; pass=$((pass+1)); }
@@ -54,11 +55,18 @@ EOF
 exit 0
 EOF
   chmod +x "$SB"/bin/*
+  # A normal Slate boot: the display options Nightfall's entry should get.
+  # Tests used to read the HOST's /proc/cmdline, so results depended on
+  # which machine ran them.
+  echo "BOOT_IMAGE=/boot/vmlinuz-x root=UUID=x ro quiet splash i915.enable_dpcd_backlight=2 i915.enable_psr=0" > "$SB/cmdline"
 }
+# RUN_CMDLINE, when set, is passed as an explicit NIGHTFALL_CMDLINE.
 run() {
-  PATH="$SB/bin:$PATH" NIGHTFALL_BOOT="$SB/boot" NIGHTFALL_GRUB_DEFAULT="$SB/etc/grub" \
-    BOOT_IS_SEPARATE="${BOOT_IS_SEPARATE:-}" \
-    sh "$S" "$SB/kernel.img" "$SB/initramfs.img" >"$SB/out" 2>&1
+  local extra=()
+  [ -n "${RUN_CMDLINE+x}" ] && extra=(NIGHTFALL_CMDLINE="$RUN_CMDLINE")
+  env PATH="$SB/bin:$PATH" NIGHTFALL_BOOT="$SB/boot" NIGHTFALL_GRUB_DEFAULT="$SB/etc/grub" \
+    NIGHTFALL_PROC_CMDLINE="$SB/cmdline" BOOT_IS_SEPARATE="${BOOT_IS_SEPARATE:-}" \
+    "${extra[@]}" sh "$S" "$SB/kernel.img" "$SB/initramfs.img" >"$SB/out" 2>&1
   echo $?
 }
 cfg() { cat "$SB/boot/grub/custom.cfg"; }
@@ -118,6 +126,82 @@ rm -rf "$SB/boot/picker" "$SB/boot/picker-default" "$SB/boot/picker-cmdline"
 rc=$(run)
 [ "$rc" = 0 ] && ok "installs cleanly with nothing to migrate" || bad "failed on a fresh machine"
 [ -e "$SB/update-grub-ran" ] && bad "ran update-grub when it had no reason to" || ok "does not touch grub.cfg when GRUB_DEFAULT is not the old id"
+
+echo "=== the display options come from a boot that can actually light the panel ==="
+# A machine that already has Nightfall installed, with working options.
+fresh_installed() {
+  setup 0 yes
+  rm -rf "$SB/boot/picker" "$SB/boot/picker-default" "$SB/boot/picker-cmdline"
+  cat > "$SB/boot/grub/custom.cfg" <<EOF
+### BEGIN nightfall-boot-manager ###
+menuentry 'Nightfall (touch)' --id nightfall {
+        linux   /boot/nightfall/vmlinuz i915.enable_dpcd_backlight=2 i915.enable_psr=0
+}
+### END nightfall-boot-manager ###
+EOF
+}
+entry_opts() { cfg | grep -E '^[[:space:]]*linux[[:space:]]' | tr ' \t' '\n\n' | grep '^i915\.' | tr '\n' ' '; }
+
+fresh_installed; rc=$(run)
+[ "$rc" = 0 ] && ok "a normal boot installs" || bad "normal boot refused: $(tail -3 "$SB/out")"
+entry_opts | grep -q "i915.enable_dpcd_backlight=2" && ok "and carries its i915 options into the entry" || bad "options lost: $(entry_opts)"
+
+# THE case: a GRUB recovery entry, straight from docs/nocturne-grub.cfg.
+fresh_installed
+echo "BOOT_IMAGE=/boot/vmlinuz-x root=UUID=x ro recovery nomodeset dis_ucode_ldr" > "$SB/cmdline"
+rc=$(run)
+[ "$rc" != 0 ] && ok "refuses to install from a recovery boot" || bad "installed from a recovery boot"
+entry_opts | grep -q "i915.enable_dpcd_backlight=2" && ok "the working entry is left exactly as it was" || bad "entry overwritten: $(entry_opts)"
+[ ! -e "$SB/boot/nightfall/vmlinuz" ] && ok "refused BEFORE copying anything into /boot" || bad "copied the kernel, then refused - a half-finished install"
+grep -q "sudo NIGHTFALL_CMDLINE=" "$SB/out" && ok "says how to override, with sudo in the right place" || bad "no usable override hint"
+
+# The two cases where the word check is the ONLY thing standing in the
+# way. Every other recovery fixture also has no i915 options against an
+# entry that does, so the "no options while the entry has some" guard
+# refused them first - and removing the word check failed nothing.
+setup 0 yes
+rm -rf "$SB/boot/picker" "$SB/boot/picker-default" "$SB/boot/picker-cmdline"
+: > "$SB/boot/grub/custom.cfg"
+echo "BOOT_IMAGE=/boot/vmlinuz-x ro recovery nomodeset dis_ucode_ldr" > "$SB/cmdline"
+rc=$(run)
+[ "$rc" != 0 ] && ok "refuses a FIRST install from a recovery boot (no entry to compare against)" \
+  || bad "first install from recovery mode wrote a bare entry"
+
+fresh_installed
+echo "ro quiet nomodeset i915.enable_dpcd_backlight=2 i915.enable_psr=0" > "$SB/cmdline"
+rc=$(run)
+[ "$rc" != 0 ] && ok "refuses nomodeset even when i915 options are present (they mean nothing with KMS off)" \
+  || bad "accepted a nomodeset boot because it happened to carry i915 options"
+
+fresh_installed; echo "ro quiet nomodeset" > "$SB/cmdline"; rc=$(run)
+[ "$rc" != 0 ] && ok "refuses nomodeset on its own" || bad "accepted nomodeset"
+
+fresh_installed; echo "ro quiet splash" > "$SB/cmdline"; rc=$(run)
+[ "$rc" != 0 ] && ok "refuses a boot with no i915 options when the entry has some" || bad "replaced working options with nothing"
+entry_opts | grep -q "i915.enable_psr=0" && ok "and keeps the existing options" || bad "existing options lost"
+
+fresh_installed; rm -f "$SB/cmdline"; rc=$(run)
+[ "$rc" != 0 ] && ok "refuses when /proc/cmdline cannot be read" || bad "carried on without reading it"
+
+# Word match, not substring: these must NOT trip the guard.
+fresh_installed; echo "ro quiet foo.recovery=1 norecovery i915.enable_psr=0" > "$SB/cmdline"; rc=$(run)
+[ "$rc" = 0 ] && ok "only the exact words nomodeset/recovery trip it" || bad "tripped on a substring"
+
+echo "=== and still allows what is legitimately different ==="
+setup 0 yes
+rm -rf "$SB/boot/picker" "$SB/boot/picker-default" "$SB/boot/picker-cmdline"
+: > "$SB/boot/grub/custom.cfg"; echo "ro quiet splash" > "$SB/cmdline"; rc=$(run)
+[ "$rc" = 0 ] && ok "first install on a panel needing no i915 options" || bad "refused a first install"
+
+fresh_installed; echo "ro quiet i915.enable_psr=0" > "$SB/cmdline"; rc=$(run)
+[ "$rc" = 0 ] && ok "fewer options than before (after a revert)" || bad "refused a revert"
+entry_opts | grep -q "enable_dpcd_backlight" && bad "kept an option the running boot dropped" || ok "and the entry follows the running boot"
+
+fresh_installed
+echo "BOOT_IMAGE=/boot/vmlinuz-x ro recovery nomodeset" > "$SB/cmdline"
+rc=$(RUN_CMDLINE="i915.enable_psr=0" run)
+[ "$rc" = 0 ] && ok "an explicit NIGHTFALL_CMDLINE overrides the check" || bad "refused an explicit override"
+entry_opts | grep -qx "i915.enable_psr=0 *" && ok "and uses exactly what it was given" || bad "override not used: $(entry_opts)"
 
 echo
 echo "passed: $pass   failed: $fail"

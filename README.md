@@ -204,7 +204,24 @@ remembering to be careful:
 The kernel command line for the entry is derived from `/proc/cmdline` rather
 than hardcoded — the running system is by definition a working display
 configuration on this hardware, so whatever lights the panel now is carried
-across. Override with `NIGHTFALL_CMDLINE=...`.
+across. Override with `NIGHTFALL_CMDLINE=...` — and put it **after** `sudo`:
+
+```sh
+sudo NIGHTFALL_CMDLINE='i915.enable_dpcd_backlight=2 i915.enable_psr=0' ./install-nightfall.sh ...
+```
+
+`NIGHTFALL_CMDLINE=... sudo ./install-nightfall.sh` looks equivalent and is not:
+sudo resets the environment, so the variable is silently dropped and the
+installer falls back to `/proc/cmdline`. `pkexec` drops it too.
+
+Because that premise — *the running system is a working display* — is false
+for a recovery boot, the installer checks it rather than assuming it. A GRUB
+recovery entry boots with `nomodeset`, so `/proc/cmdline` has no `i915` options
+at all, and reinstalling from there used to write an empty set that leaves
+Nightfall dark. Without an explicit `NIGHTFALL_CMDLINE` it now refuses a
+`nomodeset` or `recovery` boot, an unreadable `/proc/cmdline`, and a boot with
+no `i915` options when the existing entry has some. A first install, a panel
+that needs none, and fewer options after a revert are all still allowed.
 
 ## Diagnostics
 
