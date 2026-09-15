@@ -2789,6 +2789,114 @@ static void shell_quote(FILE *out, const char *name, const char *value) {
  * "gave up after 20s" call for completely different next steps, and the
  * boot log is often the only account of a failure anyone gets. */
 #define WAIT_POLL_MS 100
+/* Seconds since boot, from /proc/uptime. Written to stderr, which init
+ * captures into the boot log, so one boot shows where the time between
+ * GRUB and the menu - and between the menu and the kernel - really goes. */
+static void mark(const char *what) {
+    double up = 0;
+    FILE *f = fopen("/proc/uptime", "r");
+    if (f) { if (fscanf(f, "%lf", &up) != 1) up = 0; fclose(f); }
+    fprintf(stderr, "nightfall: [%.2f] %s\n", up, what);
+}
+
+/* ---------------- splash: something alive instead of scrolling text ----------------
+ *
+ * Two gaps used to show nothing but console text. Between GRUB and the
+ * menu, Nightfall could not draw anything until touch had appeared,
+ * because LVGL was only started after that wait - and touch has been
+ * seconds late on real boots. Between a tap and the kernel taking over,
+ * Nightfall exited and the kernel restored the text console while init
+ * saved the boot log and kexec loaded the kernel.
+ *
+ * The splash is a full-screen object on lv_layer_top(), so it covers
+ * whatever is underneath and is deleted outright rather than having to
+ * be un-built. The text lives in SPLASH_TITLE so a future setting can
+ * replace it without touching the layout. */
+#define SPLASH_TITLE "Nightfall Boot Manager"
+/* How long the booting screen may be held with no handoff. kexec normally
+ * replaces everything within a second or two; the cap exists so a handoff
+ * that never happens cannot leave a frozen spinner covering the reason. */
+#define BOOT_SCREEN_MAX_MS 60000
+
+/* Drives LVGL outside the main loop - during the touch wait, and in the
+ * child that holds the booting screen. Keeps its own clock: the main loop
+ * starts timing only just before it runs, so time counted here is never
+ * counted twice. */
+static struct timespec g_pump_last;
+static void lvgl_pump(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (g_pump_last.tv_sec || g_pump_last.tv_nsec) {
+        lv_tick_inc((uint32_t)((now.tv_sec - g_pump_last.tv_sec) * 1000 +
+                               (now.tv_nsec - g_pump_last.tv_nsec) / 1000000));
+    }
+    g_pump_last = now;
+    lv_timer_handler();
+}
+
+static lv_obj_t *splash_create(const char *line) {
+    lv_obj_t *s = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s);
+    lv_obj_set_size(s, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(s, lv_color_hex(0x101418), 0);
+    lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
+    lv_obj_set_flex_flow(s, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(s, 48, 0);
+
+    lv_obj_t *sp = lv_spinner_create(s);
+    lv_obj_set_size(sp, 260, 260);
+    lv_obj_set_style_arc_width(sp, 18, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(sp, 18, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(sp, lv_color_hex(0x3d7ee8), LV_PART_INDICATOR);
+
+    lv_obj_t *t = lv_label_create(s);
+    lv_label_set_text(t, SPLASH_TITLE);
+    lv_obj_set_style_text_color(t, lv_color_hex(0x8ec6ff), 0);
+
+    if (line && *line) {
+        lv_obj_t *l = lv_label_create(s);
+        lv_label_set_text(l, line);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(l, lv_pct(90));
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(0x93a0aa), 0);
+    }
+    /* Manually driven display: nothing else decides a repaint is due. */
+    lv_obj_invalidate(lv_layer_top());
+    lv_refr_now(NULL);
+    return s;
+}
+
+/* Called only after the selection has been written to stdout. The parent
+ * returns at once so init carries on to kexec. The child keeps the DRM
+ * file open - DRM master belongs to the open file, not the process, so
+ * the parent exiting does not give the display back - and animates the
+ * booting screen until kexec replaces the whole system. Any init path
+ * that needs the console back kills it first via the pid file.
+ *
+ * If fork fails, the parent simply exits as before and the console
+ * returns: exactly the old behaviour, never worse. */
+static void hold_boot_screen(void) {
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid != 0) return;
+    close(STDOUT_FILENO);
+    const char *pf = getenv("NIGHTFALL_BOOT_PIDFILE");
+    if (!pf) pf = "/run/nightfall/booting.pid";
+    FILE *f = fopen(pf, "w");
+    if (f) { fprintf(f, "%d\n", (int)getpid()); fclose(f); }
+    for (int ms = 0; ms < BOOT_SCREEN_MAX_MS; ms += 30) {
+        lvgl_pump();
+        usleep(30 * 1000);
+    }
+    _exit(0);
+}
+
+/* While a device is being waited for, this keeps the splash animating. */
+static void (*g_wait_pump)(void);
+
 static int wait_for_device(const char *what, struct drm_dev *drm, struct touch_dev *touch) {
     const char *s = getenv("NIGHTFALL_WAIT_SECS");
     int limit_ms = (s ? atoi(s) : 20) * 1000;
@@ -2808,6 +2916,7 @@ static int wait_for_device(const char *what, struct drm_dev *drm, struct touch_d
                         what, limit_ms / 1000);
             return -1;
         }
+        if (g_wait_pump) g_wait_pump();
         usleep(WAIT_POLL_MS * 1000);
         waited += WAIT_POLL_MS;
     }
@@ -2877,13 +2986,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "nightfall: no connected DRM output found\n");
         return 1;
     }
-
-    struct touch_dev touch;
-    if (wait_for_device("touch input device", NULL, &touch) != 0) {
-        fprintf(stderr, "nightfall: no touch input device found\n");
-        drm_close(&drm);
-        return 1;
-    }
+    mark("display ready");
 
     /* Named initial_rot deliberately. It is only correct until the first
      * auto-rotate, and the live value lives in ctx.rot - so anything
@@ -2952,12 +3055,31 @@ int main(int argc, char **argv) {
     lv_theme_t *theme = lv_theme_default_init(disp, lv_color_hex(0x3d7ee8), lv_color_hex(0x8ec6ff), true, LV_FONT_DEFAULT);
     lv_display_set_theme(disp, theme);
 
+    /* Something alive on screen from the moment the display is ours. The
+     * touch wait below used to run BEFORE LVGL was started, so a late
+     * touch controller meant a blank or text-filled screen for its whole
+     * duration. Moving that wait after this is the entire change. */
+    lv_obj_t *splash = splash_create(NULL);
+    mark("splash drawn");
+
+    struct touch_dev touch;
+    g_wait_pump = lvgl_pump;
+    int touch_rc = wait_for_device("touch input device", NULL, &touch);
+    g_wait_pump = NULL;
+    if (touch_rc != 0) {
+        fprintf(stderr, "nightfall: no touch input device found\n");
+        drm_close(&drm);
+        return 1;
+    }
+    mark("touch ready");
+
     lv_indev_t *indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, indev_read_cb);
     lv_indev_set_user_data(indev, &ctx);
     ctx.indev = indev;
 
+    lv_obj_delete(splash);
     lv_obj_t *countdown_label = NULL;
     build_ui(entries, n, timeout_secs, &countdown_label);
 
@@ -2985,6 +3107,7 @@ int main(int argc, char **argv) {
     clock_gettime(CLOCK_MONOTONIC, &last_tick);
 
     lv_timer_handler();
+    mark("menu drawn");
 
     struct pollfd fds[4];
     char inst_buf[512];
@@ -3134,12 +3257,32 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* Booting a kernel: put up a booting screen and keep it through the
+     * handoff, instead of exiting and letting the text console back while
+     * init saves the log and kexec loads the kernel. Only for a real boot -
+     * a reload, install or power action relaunches Nightfall or prints to
+     * the console, and must get the display back normally.
+     * NIGHTFALL_NO_BOOT_SPLASH=1 restores the old behaviour. */
+    int handoff = (g_selected >= 0 && !g_reload && !g_power_action && g_install < 0
+                   && have_master && !getenv("NIGHTFALL_NO_BOOT_SPLASH"));
+    if (handoff) {
+        char line[200];
+        snprintf(line, sizeof line, "Booting %.170s", entries[g_selected].title);
+        splash_create(line);
+        mark("booting screen drawn");
+    }
+
     close(touch.fd);
     if (sig_fd >= 0) close(sig_fd);
     if (timer_fd >= 0) close(timer_fd);
     if (vt_fd >= 0) close(vt_fd);
-    drm_close(&drm);
-    free(lvgl_buf);
+    /* drm_close would restore the console's own display configuration -
+     * the exact thing the booting screen exists to avoid. The child in
+     * hold_boot_screen() needs the display and the draw buffer. */
+    if (!handoff) {
+        drm_close(&drm);
+        free(lvgl_buf);
+    }
 
     if (g_reload) {
         /* The install already ran here, in front of the user. init only
@@ -3180,5 +3323,6 @@ int main(int argc, char **argv) {
     shell_quote(stdout, "SELECTED_BY", g_selected_by_timeout ? "timeout" : "user");
     fprintf(stderr, "nightfall: selection made by %s\n",
             g_selected_by_timeout ? "TIMEOUT (nothing was tapped)" : "user tap");
+    if (handoff) hold_boot_screen();
     return 0;
 }

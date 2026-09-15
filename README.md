@@ -273,6 +273,27 @@ but still usable, since touch follows the same transform.
 `Repair → Clear Nightfall's saved settings` forgets the default and command
 lines; `--uninstall` removes all five files.
 
+### What the screen shows while it boots
+
+Nothing scrolls past on a normal boot. The Nightfall kernel boots with `quiet`,
+and `init` sends its routine progress to the boot log instead of the screen —
+while warnings, fallbacks and install messages still print. As soon as the
+display is ready, a spinner with **Nightfall Boot Manager** replaces the black
+screen and keeps animating while the touch controller comes up. After you pick
+a kernel, a *Booting …* screen stays up until the kernel takes over: a child
+process keeps the display open, since the display belongs to the open file
+rather than to the process, so Nightfall exiting doesn't give it back to the
+text console. If anything on that path fails, `init` takes the screen back
+before printing, so a spinner can never hide an error.
+
+Two short stretches still aren't ours to draw: the second or so while the
+Nightfall kernel itself starts, and the moment after the handoff before
+Ubuntu's own splash appears. Both are black rather than scrolling.
+
+Every boot-log line carries seconds since boot, as does each step Nightfall
+logs (`display ready`, `splash drawn`, `touch ready`, `menu drawn`,
+`booting screen drawn`), so one boot shows exactly where the time goes.
+
 ### Knobs
 
 | Variable | Default | What it does |
@@ -282,6 +303,9 @@ lines; `--uninstall` removes all five files.
 | `NIGHTFALL_WAIT_SECS` | `20` | How long `picker` waits for DRM and touch |
 | `NIGHTFALL_WAIT_ROOT` | `15` | How long `init` waits for the root device |
 | `NIGHTFALL_FALLBACK_PAUSE` | `8` | On-screen hold before a fallback kexec |
+| `NIGHTFALL_AUTOROTATE` | on | `0`/`off` pins the rotation instead of following the accelerometer |
+| `NIGHTFALL_VERBOSE` | unset | `1` puts `init`'s routine progress back on screen (it always goes to the boot log) |
+| `NIGHTFALL_NO_BOOT_SPLASH` | unset | `1` skips the booting screen, so the text console returns before the kernel starts |
 | `REAL_ROOT_DEV` | `/dev/mmcblk0p2` | Partition holding `/boot/grub/grub.cfg` |
 
 ## Testing

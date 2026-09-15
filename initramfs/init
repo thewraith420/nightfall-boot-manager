@@ -52,16 +52,34 @@ stages=""
 #
 # The loud, deliberate blocks - install progress, the fallback banner,
 # the rescue shell - echo directly and are untouched by either.
+# Each boot-log line carries seconds since boot, so a single boot shows
+# where the time between GRUB and the menu actually goes. /proc/uptime,
+# not date: date has one-second resolution and there is no clock yet.
+_up() { cut -d' ' -f1 /proc/uptime 2>/dev/null || echo "?"; }
 stage() {
-    stages="${stages}  - $1
+    stages="${stages}  - [$(_up)] $1
 "
     [ -n "${NIGHTFALL_VERBOSE:-}" ] && echo "nightfall: $1" >&2
     return 0
 }
 warn() {
-    stages="${stages}  - $1
+    stages="${stages}  - [$(_up)] $1
 "
     echo "nightfall: $1" >&2
+}
+
+# Nightfall keeps drawing a booting screen after it exits, from a child
+# that holds the display through the handoff to the kernel. A path that
+# needs the console back must take the screen back first, or its message
+# is printed behind a spinner nobody can see past. Text printed while the
+# display is held is not lost - the console redraws when it is released -
+# so releasing first is enough; no pause is needed.
+BOOTING_PID=/run/nightfall/booting.pid
+release_display() {
+    [ -f "$BOOTING_PID" ] || return 0
+    kill "$(cat "$BOOTING_PID" 2>/dev/null)" 2>/dev/null
+    rm -f "$BOOTING_PID"
+    return 0
 }
 
 # As PID 1 we are in a footrace with driver probe: a real boot log shows
@@ -220,6 +238,7 @@ save_log() {
 }
 
 rescue() {
+    release_display
     save_log "rescue: $1"
     echo "nightfall: $1" >&2
     echo "nightfall: dropping to a rescue shell" >&2
@@ -573,6 +592,7 @@ fi
 # the selection. Say so on screen, show why, and hold long enough to
 # read or photograph it before the kexec wipes the display.
 if [ -n "${nightfall_failed:-}" ]; then
+    release_display
     warn "FALLBACK: $nightfall_failed"
     echo "" >&2
     echo "nightfall: ================================================" >&2

@@ -193,6 +193,28 @@ echo 'SELECTED_BY=timeout'
 exit 0
 EOF
     ;;
+    # Stand-ins for Nightfall's booting-screen child: something alive
+    # holding the display, recorded where init looks for it.
+    holdok) cat > "$SB/bin/nightfall" <<EOF
+#!/bin/sh
+sleep 30 &
+echo \$! > "$SB/run/nightfall/booting.pid"
+echo \$! > "$SB/heldpid"
+echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
+echo 'SELECTED_INITRD=/boot/initrd.img-chosen'
+echo 'SELECTED_CMDLINE=ro quiet'
+echo 'SELECTED_BY=user'
+exit 0
+EOF
+    ;;
+    holdcrash) cat > "$SB/bin/nightfall" <<EOF
+#!/bin/sh
+sleep 30 &
+echo \$! > "$SB/run/nightfall/booting.pid"
+echo \$! > "$SB/heldpid"
+exit 3
+EOF
+    ;;
     restart)  printf '#!/bin/sh\necho "POWER_ACTION=reboot"\nexit 0\n'   > "$SB/bin/nightfall" ;;
     shutdown) printf '#!/bin/sh\necho "POWER_ACTION=poweroff"\nexit 0\n' > "$SB/bin/nightfall" ;;
   esac
@@ -508,6 +530,30 @@ both | grep -q "ignoring .*nightfall-rotate" && ok "an ignored setting is still 
 setup quiet ok 0 0; NIGHTFALL_VERBOSE=1 run
 both | grep -q "discovering kernels from grub.cfg" && ok "NIGHTFALL_VERBOSE=1 puts routine progress back on screen" \
   || bad "NIGHTFALL_VERBOSE did nothing"
+
+echo "=== 16. the booting screen is held through a boot, and released for a fallback ==="
+alive() {  # a killed process can linger briefly as a zombie; give it a moment
+  for _i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$1" 2>/dev/null || return 1; sleep 0.1; done
+  return 0
+}
+setup hold holdok 0 0; run
+hp=$(cat "$SB/heldpid" 2>/dev/null)
+[ -n "$hp" ] && alive "$hp" && ok "a normal boot leaves the booting screen up through the handoff" \
+  || bad "init took the screen back before kexec - the text console would reappear"
+both | grep -q "MARKER_KEXEC" && ok "and still hands off to the kernel" || bad "did not kexec"
+[ -n "$hp" ] && kill "$hp" 2>/dev/null
+
+setup hold holdcrash 0 0; run
+hp=$(cat "$SB/heldpid" 2>/dev/null)
+[ -n "$hp" ] && ! alive "$hp" && ok "a fallback takes the screen back first" \
+  || { bad "a spinner was left covering the fallback banner"; [ -n "$hp" ] && kill "$hp" 2>/dev/null; }
+[ ! -f "$SB/run/nightfall/booting.pid" ] && ok "and clears the pid file" || bad "left a stale pid file"
+both | grep -q "the menu could not be shown" && ok "the fallback banner is still printed" || bad "banner missing"
+
+echo "=== 17. boot-log lines carry seconds since boot ==="
+setup ts ok 0 0; run
+log | grep -qE '^  - \[[0-9]+\.[0-9]+\] discovering kernels from grub.cfg' \
+  && ok "each stage is timestamped from /proc/uptime" || bad "no timestamps: $(log | grep discovering)"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"
