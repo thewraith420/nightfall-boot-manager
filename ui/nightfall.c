@@ -2851,6 +2851,15 @@ static void lvgl_pump(void) {
                                (now.tv_nsec - g_pump_last.tv_nsec) / 1000000));
     }
     g_pump_last = now;
+    /* Auto-rotate here too, so the boot screens follow the tablet the way
+     * the menu does. The main loop polls the accelerometer itself, but the
+     * splash and the booting screen run outside it - during the touch
+     * wait, during their minimum time, and in the child holding the
+     * display through the handoff. Without this they stayed in whatever
+     * orientation the tablet happened to be in when Nightfall started.
+     * accel_poll() rate-limits itself and does nothing at all when there
+     * is no accelerometer, so this costs almost nothing. */
+    accel_poll();
     lv_timer_handler();
 }
 

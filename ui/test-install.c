@@ -482,6 +482,50 @@ int main(void) {
         ck(!lv_obj_has_flag(cd2, LV_OBJ_FLAG_HIDDEN), "by transparency, not by removing it from the layout");
     }
 
+    /* --- the boot screens follow rotation --- */
+    /* The splash and the booting screen run outside the main loop, so they
+     * only rotate if the pump that drives them polls the accelerometer.
+     * Driven through the REAL lvgl_pump() with a fake IIO device. */
+    {
+        char dir[] = "/tmp/nf-rot-XXXXXX";
+        if (mkdtemp(dir)) {
+            char pth[256]; FILE *af;
+            snprintf(pth, sizeof pth, "%s/in_accel_x_raw", dir);
+            af = fopen(pth, "w"); if (af) { fprintf(af, "0\n"); fclose(af); }
+            /* +Y down: held upright landscape, measured on the Slate. */
+            snprintf(pth, sizeof pth, "%s/in_accel_y_raw", dir);
+            af = fopen(pth, "w"); if (af) { fprintf(af, "7800\n"); fclose(af); }
+
+            setenv("NIGHTFALL_ACCEL", dir, 1);
+            g_accel_dir[0] = '\0';
+            accel_find();
+            g_autorotate = 1;
+
+            static struct drm_dev rdd;
+            rdd.width = 3000; rdd.height = 2000; rdd.stride = 3000 * 4;
+            static struct nightfall_ctx rctx;
+            rctx.drm = &rdd; rctx.rot = ROT_270; rctx.cw = 2000; rctx.ch = 3000;
+            g_ctx = &rctx;
+
+            /* Long enough for the debounce: readings are 250ms apart and
+             * three in a row are needed before the screen turns. */
+            for (int i = 0; i < 70 && rctx.rot == ROT_270; i++) {
+                lvgl_pump();
+                usleep(30 * 1000);
+            }
+            ck(rctx.rot == ROT_0, "a boot screen rotates when the tablet is turned");
+            ck(rctx.cw == 3000 && rctx.ch == 2000,
+               "and the canvas swaps with it, so the screen is not left blank");
+
+            snprintf(pth, sizeof pth, "%s/in_accel_x_raw", dir); unlink(pth);
+            snprintf(pth, sizeof pth, "%s/in_accel_y_raw", dir); unlink(pth);
+            rmdir(dir);
+            unsetenv("NIGHTFALL_ACCEL");
+            g_accel_dir[0] = '\0';
+            g_autorotate = 0;
+        }
+    }
+
     printf("\npassed: %d  failed: %d\n", passes, fails);
     return fails ? 1 : 0;
 }

@@ -295,6 +295,10 @@ Two short stretches still aren't ours to draw: the second or so while the
 Nightfall kernel itself starts, and the moment after the handoff before
 Ubuntu's own splash appears. Both are black rather than scrolling.
 
+Both screens follow the tablet's orientation, like the menu does — they run
+outside the main event loop, so the pump that animates them polls the
+accelerometer too.
+
 Both screens stay up for at least 1.5 s. The work behind them is usually
 fast — on the Slate touch appears 0.06 s after the splash is drawn — so without
 a minimum the splash flashed past in about 0.2 s. The booting screen is held
