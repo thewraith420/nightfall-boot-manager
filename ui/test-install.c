@@ -449,6 +449,39 @@ int main(void) {
 
     remove("/tmp/mock-remove.sh");
     remove("/tmp/mock-install-ok.sh"); remove("/tmp/mock-install-bad.sh");
+    /* --- tapping to stop the countdown must not move the menu --- */
+    /* The countdown line used to be HIDDEN on the first tap. The screen is
+     * a flex column, so every button below it jumped up one line - which
+     * Bob saw as a glitch. Asserted as the thing a person notices: the
+     * menu's position, before and after. */
+    {
+        lv_obj_t *scr = lv_obj_create(NULL);
+        lv_screen_load(scr);
+        static struct entry e2[3] = {
+            { "Ubuntu", "/boot/vmlinuz-a", "/boot/initrd-a", "ro", 0 },
+            { "Ubuntu old", "/boot/vmlinuz-b", "/boot/initrd-b", "ro", 0 },
+            { "Ubuntu older", "/boot/vmlinuz-c", "/boot/initrd-c", "ro", 0 },
+        };
+        lv_obj_t *cd2 = NULL;
+        build_ui(e2, 3, 30, &cd2);
+        lv_label_set_text_fmt(cd2, "Booting default in %ds - tap to choose", 30);
+        lv_obj_update_layout(scr);
+        ck(cd2 != NULL, "a timeout draws the countdown line");
+
+        lv_area_t before, after;
+        lv_obj_get_coords(g_list, &before);
+        int32_t cd_h = lv_obj_get_height(cd2);
+
+        countdown_silence(cd2);            /* what the first tap does */
+        lv_obj_update_layout(scr);
+        lv_obj_get_coords(g_list, &after);
+
+        ck(before.y1 == after.y1, "the menu does not move when the countdown is dismissed");
+        ck(lv_obj_get_height(cd2) == cd_h, "the countdown keeps its height");
+        ck(lv_obj_get_style_opa(cd2, 0) == LV_OPA_TRANSP, "and is no longer visible");
+        ck(!lv_obj_has_flag(cd2, LV_OBJ_FLAG_HIDDEN), "by transparency, not by removing it from the layout");
+    }
+
     printf("\npassed: %d  failed: %d\n", passes, fails);
     return fails ? 1 : 0;
 }

@@ -1381,6 +1381,21 @@ static lv_obj_t *g_prog_status;
 static lv_obj_t *g_prog_log;
 static lv_obj_t *g_prog_spinner;
 static lv_obj_t *g_countdown;         /* so the install can silence it */
+
+/* Takes the countdown off the screen WITHOUT giving up its space.
+ *
+ * It used to be hidden (LV_OBJ_FLAG_HIDDEN), and its text blanked. The
+ * screen is a flex column, so a hidden child is removed from the layout
+ * and everything below it - every menu button - jumped up by one line the
+ * moment you tapped. Bob: "all the buttons shift up, it just feels like a
+ * glitch". Hiding was right, because stale "Booting default in 12s" text
+ * used to follow you into every submenu; it is only the reflow that was
+ * wrong. Fully transparent keeps the line's height, so nothing moves, and
+ * the text is left alone because an empty label is shorter than a full
+ * one. */
+static void countdown_silence(lv_obj_t *label) {
+    if (label) lv_obj_set_style_opa(label, LV_OPA_TRANSP, 0);
+}
 /* Hard interlock: nothing may auto-boot while an install is running.
  * In practice the countdown is already cancelled - reaching the install
  * screen takes several taps and the first one kills it - but "in
@@ -1508,7 +1523,7 @@ static void show_progress(const char *heading, const char *subject, const char *
     g_prog_total = 0;
     g_prog_done = 0;
     g_installing = 1;
-    if (g_countdown) lv_obj_add_flag(g_countdown, LV_OBJ_FLAG_HIDDEN);
+    countdown_silence(g_countdown);
     lv_label_set_text(g_header, heading);
 
     lv_obj_t *title = lv_label_create(g_list);
@@ -3284,10 +3299,9 @@ int main(int argc, char **argv) {
                         /* "Booting default in 30s - tap to choose" is
                          * false the moment you have tapped, and it
                          * follows you into every submenu. */
-                        if (countdown_label) lv_obj_add_flag(countdown_label, LV_OBJ_FLAG_HIDDEN);
+                        countdown_silence(countdown_label);
                         struct itimerspec off = {0};
                         timerfd_settime(timer_fd, 0, &off, NULL);
-                        if (countdown_label) lv_label_set_text(countdown_label, "");
                     }
                 }
             }
