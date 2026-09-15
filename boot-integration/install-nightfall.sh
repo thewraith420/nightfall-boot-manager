@@ -159,6 +159,14 @@ esac
 # fewer options than before (a revert), and any explicit NIGHTFALL_CMDLINE.
 #
 # NIGHTFALL_PROC_CMDLINE is a test seam and nothing else.
+# Keep the Nightfall kernel's own boot messages off the screen. Without
+# these the picker kernel prints its whole boot log between GRUB and the
+# menu. quiet and loglevel=3 still let real errors through, and the
+# cursor is hidden so the gap is black rather than a blinking prompt.
+# Deliberately separate from the i915 options: those are derived and
+# validated, these are fixed.
+NIGHTFALL_QUIET_ARGS="quiet loglevel=3 vt.global_cursor_default=0"
+
 PROC_CMDLINE=${NIGHTFALL_PROC_CMDLINE:-/proc/cmdline}
 override_hint="  If you are sure, say explicitly what to use - note sudo's placement:
     sudo NIGHTFALL_CMDLINE='i915.enable_dpcd_backlight=2 i915.enable_psr=0' $0 ...
@@ -243,7 +251,7 @@ menuentry 'Nightfall (touch)' --id nightfall {
         insmod part_gpt
         insmod ext2
         search --no-floppy --fs-uuid --set=root $boot_uuid
-        linux   $kpath $nightfall_cmdline
+        linux   $kpath $NIGHTFALL_QUIET_ARGS $nightfall_cmdline
         initrd  $ipath
 }
 $END_MARK

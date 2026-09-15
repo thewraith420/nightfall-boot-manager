@@ -185,7 +185,7 @@ EOF
     ;;
     envdump) cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
-echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset}" >&2
+echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset} ENV_TIMEOUT=${NIGHTFALL_TIMEOUT_SECS:-unset}" >&2
 echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
 echo 'SELECTED_INITRD=/boot/initrd.img-chosen'
 echo 'SELECTED_CMDLINE=ro quiet'
@@ -264,12 +264,16 @@ run() {
   PATH="$_path" \
   REAL_ROOT_DEV="$SB/dev/rootdev" NIGHTFALL_FALLBACK_PAUSE=0 \
   NIGHTFALL_WAIT_ROOT=${W:-3} NIGHTFALL_WAIT_DRM=${W:-3} NIGHTFALL_WAIT_INPUT=${W:-3} \
-  NIGHTFALL_INSTALL_PAUSE=0 \
+  NIGHTFALL_INSTALL_PAUSE=0 NIGHTFALL_VERBOSE="${NIGHTFALL_VERBOSE:-}" \
     ${TEST_SH:-/bin/sh} "$SB/init" >"$SB/out" 2>"$SB/err"
 }
 
 log()  { cat "$SB/mnt/root/boot/nightfall-last-boot.log" 2>/dev/null; }
 both() { cat "$SB/out" "$SB/err" 2>/dev/null; }
+# What Nightfall itself wrote to stderr. init starts it with
+# 2>/run/nightfall/nightfall.stderr, so a mock's report lands HERE, never
+# in init's own output - grepping both() for it finds nothing, silently.
+nfe()  { cat "$SB/run/nightfall/nightfall.stderr" 2>/dev/null; }
 
 echo "=== 1. happy path: nightfall returns a selection ==="
 setup happy ok 0 0; run
@@ -418,35 +422,35 @@ echo "=== 13. the menu timeout is settable from /boot, and validated hard ==="
 # The one knob where bad input is dangerous rather than merely wrong:
 # Nightfall treats 0 as "disable auto-boot", so garbage becoming 0 would
 # leave a keyboardless tablet sitting at a menu forever if touch failed.
-setup happy ok 0 0
+# Observed as what Nightfall is actually handed. The first version of
+# these checks grepped init's console for "NIGHTFALL_TIMEOUT_SECS=", a
+# string init never prints - so the junk-rejection cases could not fail
+# no matter what init exported.
+setup env envdump 0 0
 echo "45" > "$SB/mnt/root/boot/nightfall-timeout"
 run
-both | grep -q "menu timeout 45s" && ok "a plain number is applied" || bad "timeout not applied"
+nfe | grep -q "ENV_TIMEOUT=45" && ok "a plain number is passed to Nightfall" || bad "timeout not applied: $(nfe | grep ENV_)"
 
 # Everything below must be treated as though the file were absent.
 for junk in "" "  " "abc" "30s" "-5" "3.5" "# 30" "99999"; do
-  setup happy ok 0 0
+  setup env envdump 0 0
   printf '%s\n' "$junk" > "$SB/mnt/root/boot/nightfall-timeout"
   run
-  if both | grep -q "NIGHTFALL_TIMEOUT_SECS="; then
-    bad "junk timeout '$junk' was exported anyway"
-  else
-    ok "rejects '$junk'"
-  fi
+  nfe | grep -q "ENV_TIMEOUT=unset" && ok "rejects '$junk'" || bad "junk timeout '$junk' reached Nightfall: $(nfe | grep ENV_)"
 done
 
 # Deliberate 0 is legal - it is a documented choice, and the guard is
 # against garbage BECOMING 0, not against meaning it.
-setup happy ok 0 0
+setup env envdump 0 0
 echo "0" > "$SB/mnt/root/boot/nightfall-timeout"
 run
-log | grep -q "menu timeout 0s" && ok "a deliberate 0 is honoured" || bad "0 was rejected"
+nfe | grep -q "ENV_TIMEOUT=0" && ok "a deliberate 0 is honoured" || bad "0 was rejected: $(nfe | grep ENV_)"
 
 # Absent file must change nothing at all.
-setup happy ok 0 0
+setup env envdump 0 0
 run
-both | grep -q "NIGHTFALL_TIMEOUT_SECS" && bad "exported a timeout with no file" \
-  || ok "no file means Nightfall's compiled default, untouched"
+nfe | grep -q "ENV_TIMEOUT=unset" && ok "no file means Nightfall's compiled default, untouched" \
+  || bad "exported a timeout with no file: $(nfe | grep ENV_)"
 both | grep -q "MARKER_KEXEC" && ok "and the boot still works" || bad "broke the normal path"
 
 echo "=== 14. starting rotation and auto-rotate are settable from /boot ==="
@@ -455,7 +459,6 @@ echo "=== 14. starting rotation and auto-rotate are settable from /boot ==="
 # 2>/run/nightfall/nightfall.stderr, so the mock's report lands in that
 # file. Grepping init's own stderr found nothing, which looked exactly like
 # every value being wrong.
-nfe() { cat "$SB/run/nightfall/nightfall.stderr" 2>/dev/null; }
 setup env envdump 0 0; run
 nfe | grep -q "ENV_ROTATE=270 ENV_AUTO=unset" \
   && ok "no files: 270 and auto-rotate left at Nightfall's default" || bad "defaults wrong: $(nfe | grep ENV_)"
@@ -485,6 +488,26 @@ for junk in "" "yes" "2" "true"; do
   setup env envdump 0 0; printf '%s\n' "$junk" > "$SB/mnt/root/boot/nightfall-autorotate"; run
   nfe | grep -q "ENV_AUTO=unset" && ok "autorotate '$junk' ignored, stays on" || bad "autorotate '$junk' leaked: $(nfe | grep ENV_)"
 done
+
+echo "=== 15. routine progress stays off the screen; problems do not ==="
+# Between GRUB and the menu, and again before the kernel, init used to
+# print a screenful of scrolling progress. Routine lines now go only to
+# the boot log. Warnings, the fallback banner and install messages must
+# still reach the screen - quiet must never hide a problem.
+setup quiet ok 0 0; run
+both | grep -q "discovering kernels from grub.cfg" && bad "routine progress still printed on screen" \
+  || ok "routine progress is not printed to the screen"
+log | grep -q "discovering kernels from grub.cfg" && ok "but it is still recorded in the boot log" \
+  || bad "routine progress dropped from the boot log too"
+both | grep -q "kexec into" && bad "the handoff to the kernel still prints" || ok "the handoff to the kernel prints nothing"
+
+setup quiet ok 0 0; echo "abc" > "$SB/mnt/root/boot/nightfall-rotate"; run
+both | grep -q "ignoring .*nightfall-rotate" && ok "an ignored setting is still shown on screen" \
+  || bad "a warning was silenced"
+
+setup quiet ok 0 0; NIGHTFALL_VERBOSE=1 run
+both | grep -q "discovering kernels from grub.cfg" && ok "NIGHTFALL_VERBOSE=1 puts routine progress back on screen" \
+  || bad "NIGHTFALL_VERBOSE did nothing"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"

@@ -37,7 +37,28 @@ mkdir -p /run/nightfall /mnt/root
 # diagnostics must never be the reason a machine doesn't come up.
 BOOT_LOG=/mnt/root/boot/nightfall-last-boot.log
 stages=""
+# Two kinds of progress line, and only one belongs on the screen.
+#
+# stage: routine progress - "mounting real root", "discovering kernels".
+# Recorded in the boot log, where it is useful, and NOT printed to the
+# console, where it was a screenful of scrolling text between GRUB and
+# the menu, and again between the menu and the kernel. NIGHTFALL_VERBOSE=1
+# on the kernel command line (GRUB's 'e' editor, with a keyboard) puts it
+# back on screen for debugging.
+#
+# warn: something a person looking at the tablet should see - a device
+# that has not appeared yet, a setting that was ignored, a fallback.
+# Always printed. Quiet must never hide a problem.
+#
+# The loud, deliberate blocks - install progress, the fallback banner,
+# the rescue shell - echo directly and are untouched by either.
 stage() {
+    stages="${stages}  - $1
+"
+    [ -n "${NIGHTFALL_VERBOSE:-}" ] && echo "nightfall: $1" >&2
+    return 0
+}
+warn() {
     stages="${stages}  - $1
 "
     echo "nightfall: $1" >&2
@@ -64,7 +85,7 @@ have_any() {
 wait_until() {
     _n=0
     "$2" && return 0
-    stage "waiting for $1"
+    warn "waiting for $1"
     while [ "$_n" -lt "$3" ]; do
         sleep 1
         _n=$((_n + 1))
@@ -73,7 +94,7 @@ wait_until() {
             return 0
         fi
     done
-    stage "TIMEOUT: $1 never appeared after ${3}s"
+    warn "TIMEOUT: $1 never appeared after ${3}s"
     return 1
 }
 
@@ -275,7 +296,7 @@ if [ -f "$TIMEOUT_FILE" ]; then
     read -r _t < "$TIMEOUT_FILE" 2>/dev/null || _t=""
     case "$_t" in
         ''|*[!0-9]*)
-            stage "ignoring $TIMEOUT_FILE: not a plain number" ;;
+            warn "ignoring $TIMEOUT_FILE: not a plain number" ;;
         *)
             # Upper bound as a sanity check rather than a policy: an
             # hour of waiting is indistinguishable from a hang, and a
@@ -285,7 +306,7 @@ if [ -f "$TIMEOUT_FILE" ]; then
                 export NIGHTFALL_TIMEOUT_SECS
                 stage "menu timeout ${_t}s (from nightfall-timeout)"
             else
-                stage "ignoring $TIMEOUT_FILE: ${_t}s is out of range"
+                warn "ignoring $TIMEOUT_FILE: ${_t}s is out of range"
             fi ;;
     esac
 fi
@@ -304,7 +325,7 @@ build_menu_files() {
        && [ -s /run/nightfall/menu.tsv.cl ]; then
         cat /run/nightfall/menu.tsv.cl > /run/nightfall/menu.tsv
     else
-        stage "saved command lines not applied (continuing without them)"
+        warn "saved command lines not applied (continuing without them)"
         cat /run/nightfall/menu.tsv.def > /run/nightfall/menu.tsv
     fi
 }
@@ -347,7 +368,7 @@ if [ -f "$ROTATE_FILE" ]; then
     case "$_r" in
         0|90|180|270) NIGHTFALL_ROTATE=$_r
                       stage "starting rotation ${_r} (from nightfall-rotate)" ;;
-        *)            stage "ignoring $ROTATE_FILE: expected 0, 90, 180 or 270" ;;
+        *)            warn "ignoring $ROTATE_FILE: expected 0, 90, 180 or 270" ;;
     esac
 fi
 if [ -f "$AUTOROTATE_FILE" ]; then
@@ -362,7 +383,7 @@ if [ -f "$AUTOROTATE_FILE" ]; then
                stage "auto-rotate off (from nightfall-autorotate)" ;;
         # Garbage keeps auto-rotate ON, the default. An unreadable file
         # should not silently pin the rotation.
-        *)     stage "ignoring $AUTOROTATE_FILE: expected 1, 0, on or off" ;;
+        *)     warn "ignoring $AUTOROTATE_FILE: expected 1, 0, on or off" ;;
     esac
 fi
 
@@ -493,13 +514,13 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
             refresh_menu
             continue
         fi
-        stage "too many reloads - booting instead"
+        warn "too many reloads - booting instead"
     fi
 
     if [ -n "$INSTALL_TARBALL" ]; then
         install_rounds=$((install_rounds + 1))
         if [ "$install_rounds" -gt 3 ]; then
-            stage "too many install rounds - booting instead"
+            warn "too many install rounds - booting instead"
         else
             stage "installing $INSTALL_TARBALL"
             echo "" >&2
@@ -520,7 +541,7 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
                 stage "install succeeded"
                 echo "nightfall: install finished - returning to the menu." >&2
             else
-                stage "INSTALL FAILED for $INSTALL_TARBALL"
+                warn "INSTALL FAILED for $INSTALL_TARBALL"
                 echo "nightfall: install FAILED - see the message above." >&2
                 echo "nightfall: nothing was removed; existing kernels still boot." >&2
             fi
@@ -552,7 +573,7 @@ fi
 # the selection. Say so on screen, show why, and hold long enough to
 # read or photograph it before the kexec wipes the display.
 if [ -n "${nightfall_failed:-}" ]; then
-    stage "FALLBACK: $nightfall_failed"
+    warn "FALLBACK: $nightfall_failed"
     echo "" >&2
     echo "nightfall: ================================================" >&2
     echo "nightfall: the menu could not be shown ($nightfall_failed)." >&2

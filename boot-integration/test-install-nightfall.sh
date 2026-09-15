@@ -145,6 +145,10 @@ entry_opts() { cfg | grep -E '^[[:space:]]*linux[[:space:]]' | tr ' \t' '\n\n' |
 fresh_installed; rc=$(run)
 [ "$rc" = 0 ] && ok "a normal boot installs" || bad "normal boot refused: $(tail -3 "$SB/out")"
 entry_opts | grep -q "i915.enable_dpcd_backlight=2" && ok "and carries its i915 options into the entry" || bad "options lost: $(entry_opts)"
+# The Nightfall kernel's own boot messages were a screenful of scrolling
+# text between GRUB and the menu.
+cfg | grep -qE '^[[:space:]]*linux[[:space:]].*quiet loglevel=3 vt.global_cursor_default=0' \
+  && ok "and boots quietly, so no kernel text scrolls past" || bad "entry is not quiet: $(cfg | grep linux)"
 
 # THE case: a GRUB recovery entry, straight from docs/nocturne-grub.cfg.
 fresh_installed
