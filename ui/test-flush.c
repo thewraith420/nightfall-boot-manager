@@ -222,6 +222,16 @@ int main(void) {
     /* Measured on the Slate: touch appeared 0.06s after the splash was
      * drawn, so it was up for about 0.2s - too short to see. */
     {
+        /* On/off, for both screens. */
+        unsetenv("NIGHTFALL_SPLASH");
+        ck(splash_enabled(), "screens are on by default");
+        setenv("NIGHTFALL_SPLASH", "0", 1);   ck(!splash_enabled(), "0 turns them off");
+        setenv("NIGHTFALL_SPLASH", "off", 1); ck(!splash_enabled(), "off turns them off");
+        setenv("NIGHTFALL_SPLASH", "1", 1);   ck(splash_enabled(), "1 keeps them on");
+        setenv("NIGHTFALL_SPLASH", "nope", 1);
+        ck(splash_enabled(), "garbage keeps them on rather than silently switching them off");
+        unsetenv("NIGHTFALL_SPLASH");
+
         unsetenv("NIGHTFALL_SPLASH_MIN_MS");
         ck(splash_min_ms() == SPLASH_MIN_MS, "no override: the compiled minimum");
         setenv("NIGHTFALL_SPLASH_MIN_MS", "2500", 1);

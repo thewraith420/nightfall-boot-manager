@@ -406,6 +406,39 @@ if [ -f "$AUTOROTATE_FILE" ]; then
     esac
 fi
 
+# The boot screens - the spinner before the menu and the booting screen -
+# and how long they stay up. Same pattern as the settings above, for the
+# fixer's GUI. Cosmetic, so validated for correctness only: garbage is
+# ignored and Nightfall's defaults apply (screens on, 1500ms).
+SPLASH_FILE=/mnt/root/boot/nightfall-splash
+SPLASH_MS_FILE=/mnt/root/boot/nightfall-splash-ms
+if [ -f "$SPLASH_FILE" ]; then
+    _s=""
+    read -r _s < "$SPLASH_FILE" 2>/dev/null || _s=""
+    case "$_s" in
+        1|on)  NIGHTFALL_SPLASH=1; export NIGHTFALL_SPLASH
+               stage "boot screens on (from nightfall-splash)" ;;
+        0|off) NIGHTFALL_SPLASH=0; export NIGHTFALL_SPLASH
+               stage "boot screens off (from nightfall-splash)" ;;
+        *)     warn "ignoring $SPLASH_FILE: expected 1, 0, on or off" ;;
+    esac
+fi
+if [ -f "$SPLASH_MS_FILE" ]; then
+    _m=""
+    read -r _m < "$SPLASH_MS_FILE" 2>/dev/null || _m=""
+    case "$_m" in
+        ''|*[!0-9]*)
+            warn "ignoring $SPLASH_MS_FILE: not a plain number of milliseconds" ;;
+        *)
+            if [ "$_m" -le 10000 ]; then
+                NIGHTFALL_SPLASH_MIN_MS=$_m; export NIGHTFALL_SPLASH_MIN_MS
+                stage "boot screens shown for at least ${_m}ms (from nightfall-splash-ms)"
+            else
+                warn "ignoring $SPLASH_MS_FILE: ${_m}ms is over the 10000ms limit"
+            fi ;;
+    esac
+fi
+
 : "${NIGHTFALL_ROTATE:=270}"
 export NIGHTFALL_ROTATE
 

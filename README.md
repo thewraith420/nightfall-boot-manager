@@ -252,6 +252,8 @@ on a keyboardless tablet means a tool with a GUI rather than an editor.
 | `/boot/nightfall-timeout` | menu timeout in whole seconds, `0`–`3600` |
 | `/boot/nightfall-rotate` | starting orientation: `0`, `90`, `180` or `270` |
 | `/boot/nightfall-autorotate` | `1`/`on` or `0`/`off` |
+| `/boot/nightfall-splash` | `1`/`on` or `0`/`off` — both boot screens |
+| `/boot/nightfall-splash-ms` | shortest time they stay up, `0`–`10000` ms |
 
 `nightfall-timeout` is validated hard, and it is the one where that matters:
 Nightfall treats `0` as *disable the auto-boot entirely*, so a stray newline or
@@ -270,8 +272,11 @@ auto-rotate on rather than silently pinning the rotation. These two are
 validated for correctness rather than safety: a wrong orientation is sideways
 but still usable, since touch follows the same transform.
 
+The two splash files are validated for correctness only, since they are
+cosmetic: garbage is ignored and the defaults apply — screens on, 1500 ms.
+
 `Repair → Clear Nightfall's saved settings` forgets the default and command
-lines; `--uninstall` removes all five files.
+lines; `--uninstall` removes all seven files.
 
 ### What the screen shows while it boots
 
@@ -311,7 +316,7 @@ logs (`display ready`, `splash drawn`, `touch ready`, `menu drawn`,
 | `NIGHTFALL_FALLBACK_PAUSE` | `8` | On-screen hold before a fallback kexec |
 | `NIGHTFALL_AUTOROTATE` | on | `0`/`off` pins the rotation instead of following the accelerometer |
 | `NIGHTFALL_VERBOSE` | unset | `1` puts `init`'s routine progress back on screen (it always goes to the boot log) |
-| `NIGHTFALL_NO_BOOT_SPLASH` | unset | `1` skips the booting screen, so the text console returns before the kernel starts |
+| `NIGHTFALL_SPLASH` | on | `0`/`off` turns off both boot screens: the spinner before the menu and the booting screen |
 | `NIGHTFALL_SPLASH_MIN_MS` | `1500` | Shortest time the splash and the booting screen stay up; `0` disables the floor |
 | `REAL_ROOT_DEV` | `/dev/mmcblk0p2` | Partition holding `/boot/grub/grub.cfg` |
 

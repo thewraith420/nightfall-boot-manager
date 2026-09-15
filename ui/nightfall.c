@@ -2839,6 +2839,16 @@ static void lvgl_pump(void) {
     lv_timer_handler();
 }
 
+/* Both screens - the spinner before the menu and the booting screen - on
+ * unless NIGHTFALL_SPLASH is exactly 0 or off. Anything else, including
+ * garbage, keeps them on: init has already validated the value from
+ * /boot/nightfall-splash, and an unreadable setting should not silently
+ * change how the machine looks. */
+static int splash_enabled(void) {
+    const char *e = getenv("NIGHTFALL_SPLASH");
+    return !(e && (!strcmp(e, "0") || !strcmp(e, "off")));
+}
+
 static int splash_min_ms(void) {
     const char *e = getenv("NIGHTFALL_SPLASH_MIN_MS");
     if (!e || !*e) return SPLASH_MIN_MS;
@@ -3091,13 +3101,14 @@ int main(int argc, char **argv) {
      * touch wait below used to run BEFORE LVGL was started, so a late
      * touch controller meant a blank or text-filled screen for its whole
      * duration. Moving that wait after this is the entire change. */
-    lv_obj_t *splash = splash_create(NULL);
+    int show_splash = splash_enabled();
+    lv_obj_t *splash = show_splash ? splash_create(NULL) : NULL;
     struct timespec splash_shown;
     clock_gettime(CLOCK_MONOTONIC, &splash_shown);
-    mark("splash drawn");
+    mark(show_splash ? "splash drawn" : "splash disabled");
 
     struct touch_dev touch;
-    g_wait_pump = lvgl_pump;
+    g_wait_pump = show_splash ? lvgl_pump : NULL;
     int touch_rc = wait_for_device("touch input device", NULL, &touch);
     g_wait_pump = NULL;
     if (touch_rc != 0) {
@@ -3115,8 +3126,10 @@ int main(int argc, char **argv) {
 
     /* Touch usually appears almost at once, which is exactly why the
      * splash used to be gone before anyone saw it. */
-    pump_until(&splash_shown, splash_min_ms());
-    lv_obj_delete(splash);
+    if (splash) {
+        pump_until(&splash_shown, splash_min_ms());
+        lv_obj_delete(splash);
+    }
     lv_obj_t *countdown_label = NULL;
     build_ui(entries, n, timeout_secs, &countdown_label);
 
@@ -3299,9 +3312,9 @@ int main(int argc, char **argv) {
      * init saves the log and kexec loads the kernel. Only for a real boot -
      * a reload, install or power action relaunches Nightfall or prints to
      * the console, and must get the display back normally.
-     * NIGHTFALL_NO_BOOT_SPLASH=1 restores the old behaviour. */
+     * NIGHTFALL_SPLASH=0 turns this and the startup spinner off together. */
     int handoff = (g_selected >= 0 && !g_reload && !g_power_action && g_install < 0
-                   && have_master && !getenv("NIGHTFALL_NO_BOOT_SPLASH"));
+                   && have_master && splash_enabled());
     if (handoff) {
         char line[200];
         snprintf(line, sizeof line, "Booting %.170s", entries[g_selected].title);

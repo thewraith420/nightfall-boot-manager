@@ -185,7 +185,7 @@ EOF
     ;;
     envdump) cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
-echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset} ENV_TIMEOUT=${NIGHTFALL_TIMEOUT_SECS:-unset}" >&2
+echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset} ENV_TIMEOUT=${NIGHTFALL_TIMEOUT_SECS:-unset} ENV_SPLASH=${NIGHTFALL_SPLASH:-unset} ENV_SPLASH_MS=${NIGHTFALL_SPLASH_MIN_MS:-unset}" >&2
 echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
 echo 'SELECTED_INITRD=/boot/initrd.img-chosen'
 echo 'SELECTED_CMDLINE=ro quiet'
@@ -554,6 +554,32 @@ echo "=== 17. boot-log lines carry seconds since boot ==="
 setup ts ok 0 0; run
 log | grep -qE '^  - \[[0-9]+\.[0-9]+\] discovering kernels from grub.cfg' \
   && ok "each stage is timestamped from /proc/uptime" || bad "no timestamps: $(log | grep discovering)"
+
+echo "=== 18. boot screens on/off and their duration are settable from /boot ==="
+setup env envdump 0 0; run
+nfe | grep -q "ENV_SPLASH=unset ENV_SPLASH_MS=unset" && ok "no files: Nightfall's defaults" || bad "defaults wrong: $(nfe | grep ENV_)"
+
+for v in 1 on; do
+  setup env envdump 0 0; echo "$v" > "$SB/mnt/root/boot/nightfall-splash"; run
+  nfe | grep -q "ENV_SPLASH=1 " && ok "splash '$v' normalises to 1" || bad "splash '$v': $(nfe | grep ENV_)"
+done
+for v in 0 off; do
+  setup env envdump 0 0; echo "$v" > "$SB/mnt/root/boot/nightfall-splash"; run
+  nfe | grep -q "ENV_SPLASH=0 " && ok "splash '$v' normalises to 0" || bad "splash '$v': $(nfe | grep ENV_)"
+done
+for junk in "" "yes" "2"; do
+  setup env envdump 0 0; printf '%s\n' "$junk" > "$SB/mnt/root/boot/nightfall-splash"; run
+  nfe | grep -q "ENV_SPLASH=unset" && ok "splash '$junk' ignored, screens stay on" || bad "splash '$junk' leaked: $(nfe | grep ENV_)"
+done
+
+for v in 0 1500 10000; do
+  setup env envdump 0 0; echo "$v" > "$SB/mnt/root/boot/nightfall-splash-ms"; run
+  nfe | grep -q "ENV_SPLASH_MS=$v\b" && ok "duration ${v}ms is passed through" || bad "duration $v: $(nfe | grep ENV_)"
+done
+for junk in "" "abc" "1.5" "-100" "1500ms" "10001"; do
+  setup env envdump 0 0; printf '%s\n' "$junk" > "$SB/mnt/root/boot/nightfall-splash-ms"; run
+  nfe | grep -q "ENV_SPLASH_MS=unset" && ok "duration '$junk' ignored" || bad "duration '$junk' leaked: $(nfe | grep ENV_)"
+done
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"
