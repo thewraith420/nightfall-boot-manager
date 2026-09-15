@@ -2817,6 +2817,11 @@ static void mark(const char *what) {
  * replaces everything within a second or two; the cap exists so a handoff
  * that never happens cannot leave a frozen spinner covering the reason. */
 #define BOOT_SCREEN_MAX_MS 60000
+/* The shortest time either screen stays up. The work behind them is
+ * usually quick, so without a floor the splash flashed past too fast to
+ * see - Bob: "the duration is going to need to be extended a little to be
+ * enjoyed". NIGHTFALL_SPLASH_MIN_MS overrides it; 0 turns the floor off. */
+#define SPLASH_MIN_MS 1500
 
 /* Drives LVGL outside the main loop - during the touch wait, and in the
  * child that holds the booting screen. Keeps its own clock: the main loop
@@ -2832,6 +2837,33 @@ static void lvgl_pump(void) {
     }
     g_pump_last = now;
     lv_timer_handler();
+}
+
+static int splash_min_ms(void) {
+    const char *e = getenv("NIGHTFALL_SPLASH_MIN_MS");
+    if (!e || !*e) return SPLASH_MIN_MS;
+    /* Digits only, like every other setting here. strtol quietly skips
+     * leading whitespace, so " 5" would otherwise become 5. */
+    if (*e < '0' || *e > '9') return SPLASH_MIN_MS;
+    char *end;
+    long v = strtol(e, &end, 10);
+    if (*end || v < 0 || v > 10000) return SPLASH_MIN_MS;   /* garbage: default */
+    return (int)v;
+}
+
+static long ms_since(const struct timespec *t0) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - t0->tv_sec) * 1000L + (now.tv_nsec - t0->tv_nsec) / 1000000L;
+}
+
+/* Keeps the screen animating until at least `min_ms` have passed since
+ * `shown`. Nothing else happens meanwhile - this is the point. */
+static void pump_until(const struct timespec *shown, int min_ms) {
+    while (ms_since(shown) < min_ms) {
+        lvgl_pump();
+        usleep(30 * 1000);
+    }
 }
 
 static lv_obj_t *splash_create(const char *line) {
@@ -3060,6 +3092,8 @@ int main(int argc, char **argv) {
      * touch controller meant a blank or text-filled screen for its whole
      * duration. Moving that wait after this is the entire change. */
     lv_obj_t *splash = splash_create(NULL);
+    struct timespec splash_shown;
+    clock_gettime(CLOCK_MONOTONIC, &splash_shown);
     mark("splash drawn");
 
     struct touch_dev touch;
@@ -3079,6 +3113,9 @@ int main(int argc, char **argv) {
     lv_indev_set_user_data(indev, &ctx);
     ctx.indev = indev;
 
+    /* Touch usually appears almost at once, which is exactly why the
+     * splash used to be gone before anyone saw it. */
+    pump_until(&splash_shown, splash_min_ms());
     lv_obj_delete(splash);
     lv_obj_t *countdown_label = NULL;
     build_ui(entries, n, timeout_secs, &countdown_label);
@@ -3269,7 +3306,14 @@ int main(int argc, char **argv) {
         char line[200];
         snprintf(line, sizeof line, "Booting %.170s", entries[g_selected].title);
         splash_create(line);
+        struct timespec boot_shown;
+        clock_gettime(CLOCK_MONOTONIC, &boot_shown);
         mark("booting screen drawn");
+        /* Held BEFORE the selection is written: init only moves on to kexec
+         * once Nightfall exits, so this is the one place the booting screen
+         * can be given time on its own. After the fork the child keeps it up
+         * for however long the handoff itself takes. */
+        pump_until(&boot_shown, splash_min_ms());
     }
 
     close(touch.fd);

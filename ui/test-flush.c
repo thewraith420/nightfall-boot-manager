@@ -218,6 +218,42 @@ int main(void) {
         }
     }
 
+    /* ---- splash minimum on-screen time ---- */
+    /* Measured on the Slate: touch appeared 0.06s after the splash was
+     * drawn, so it was up for about 0.2s - too short to see. */
+    {
+        unsetenv("NIGHTFALL_SPLASH_MIN_MS");
+        ck(splash_min_ms() == SPLASH_MIN_MS, "no override: the compiled minimum");
+        setenv("NIGHTFALL_SPLASH_MIN_MS", "2500", 1);
+        ck(splash_min_ms() == 2500, "a plain number overrides it");
+        setenv("NIGHTFALL_SPLASH_MIN_MS", "0", 1);
+        ck(splash_min_ms() == 0, "0 turns the floor off");
+        const char *junk[] = { "abc", "15s", "-1", "99999", " 5" };
+        int all_default = 1;
+        for (int i = 0; i < 5; i++) {
+            setenv("NIGHTFALL_SPLASH_MIN_MS", junk[i], 1);
+            if (splash_min_ms() != SPLASH_MIN_MS) all_default = 0;
+        }
+        ck(all_default, "garbage falls back to the default rather than 0 or a huge wait");
+        unsetenv("NIGHTFALL_SPLASH_MIN_MS");
+
+        /* pump_until holds for the remaining time, not the whole minimum
+         * again - time already spent on screen counts. */
+        struct timespec t0;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        pump_until(&t0, 300);
+        long held = ms_since(&t0);
+        ck(held >= 300 && held < 600, "holds until the minimum has passed, and not much longer");
+
+        struct timespec old;
+        clock_gettime(CLOCK_MONOTONIC, &old);
+        old.tv_sec -= 5;                      /* shown 5s ago */
+        struct timespec t1;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        pump_until(&old, 300);
+        ck(ms_since(&t1) < 100, "a screen already up longer than the minimum is not held at all");
+    }
+
     /* ---- auto-rotate: the debounce ---- */
     {
         struct accel_debounce d = {0, 0};

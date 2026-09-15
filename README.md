@@ -290,6 +290,12 @@ Two short stretches still aren't ours to draw: the second or so while the
 Nightfall kernel itself starts, and the moment after the handoff before
 Ubuntu's own splash appears. Both are black rather than scrolling.
 
+Both screens stay up for at least 1.5 s. The work behind them is usually
+fast — on the Slate touch appears 0.06 s after the splash is drawn — so without
+a minimum the splash flashed past in about 0.2 s. The booting screen is held
+before the selection is handed back, since `init` only moves on to the kernel
+once Nightfall exits.
+
 Every boot-log line carries seconds since boot, as does each step Nightfall
 logs (`display ready`, `splash drawn`, `touch ready`, `menu drawn`,
 `booting screen drawn`), so one boot shows exactly where the time goes.
@@ -306,6 +312,7 @@ logs (`display ready`, `splash drawn`, `touch ready`, `menu drawn`,
 | `NIGHTFALL_AUTOROTATE` | on | `0`/`off` pins the rotation instead of following the accelerometer |
 | `NIGHTFALL_VERBOSE` | unset | `1` puts `init`'s routine progress back on screen (it always goes to the boot log) |
 | `NIGHTFALL_NO_BOOT_SPLASH` | unset | `1` skips the booting screen, so the text console returns before the kernel starts |
+| `NIGHTFALL_SPLASH_MIN_MS` | `1500` | Shortest time the splash and the booting screen stay up; `0` disables the floor |
 | `REAL_ROOT_DEV` | `/dev/mmcblk0p2` | Partition holding `/boot/grub/grub.cfg` |
 
 ## Testing
