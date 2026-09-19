@@ -7,7 +7,8 @@ on selection.
 **In place** (each script has its own guards and its own test suite -
 `test-init.sh`, `test-backup.sh`, `test-restore.sh`, `test-remove-backup.sh`,
 `test-rename-backup.sh`, `test-remove-kernel.sh`, `test-fsck-root.sh`,
-`test-repair.sh`, `test-cmdline.sh`, `test-discover-kernels.sh`):
+`test-repair.sh`, `test-cmdline.sh`, `test-discover-kernels.sh`,
+`test-discover-live-isos.sh`, `test-boot-live-iso.sh`):
 
 - **Backups**: `backup-system.sh` (tar via the target's own GNU tar, source
   stays read-only), `restore-system.sh` (extracts over, never wipes),
@@ -17,6 +18,12 @@ on selection.
   repair), `repair-system.sh` (`dpkg`/`clean`/`grub`), `clear-overrides.sh`.
 - **Kernels**: `install-kernel.sh`, `remove-kernel.sh`, `discover-kernels.sh`,
   `discover-tarballs.sh`, `apply-default.sh`, `apply-cmdline.sh`.
+- **Live USB**: `discover-live-isos.sh` (lists `.iso` files, cheaply - no
+  loop-mounting just to draw a list), `boot-live-iso.sh` (loop-mounts one as
+  `iso9660`, finds a `casper` or `live-boot` layout inside it, `kexec`s in).
+  **Needs `CONFIG_ISO9660_FS`/`JOLIET`/`UDF_FS` in the picker kernel, not yet
+  landed** - see the driver table below. Everything here is tested against
+  mocked `mount`/`losetup`/`kexec`; nothing has touched a real ISO yet.
 
 - `init` - PID 1: mounts `/proc` `/sys` `/dev`, mounts the real root
   partition (`/dev/mmcblk0p2`, ext4 - confirmed on hardware, no separate
@@ -274,15 +281,21 @@ not a module (`=m`):
 | touch | `I2C_HID`, `I2C_HID_ACPI`, `HID_MULTITOUCH`, `INPUT_EVDEV` |
 | backing up to a USB drive | `SCSI`, `BLK_DEV_SD`, `USB_STORAGE`, `USB_UAS`, `VFAT_FS`, `EXFAT_FS`, `NTFS3_FS`, `NLS_UTF8` |
 | auto-rotate | `MFD_CROS_EC_DEV`, `CROS_EC_SENSORHUB`, `IIO`, `IIO_BUFFER`, `IIO_TRIGGERED_BUFFER`, `IIO_CROS_EC_SENSORS_CORE`, `IIO_CROS_EC_SENSORS` |
+| booting a live USB | `BLK_DEV_LOOP` (already `=y` for other reasons), `ISO9660_FS`, `JOLIET`, `UDF_FS` |
 | the entire point | `KEXEC` |
 
-**This has bitten twice, in opposite directions, and both times the
-symptom was silence.** Touch was dead because the leaf drivers were `=y`
-while `MFD_INTEL_LPSS*` was `=m` - so the i2c bus itself never existed
-and there was nothing for the touch drivers to bind to. Auto-rotate was
-the mirror image: `cros_ec_lpcs` bound fine and logged "Chrome EC device
+**This has bitten three times now, and every time the symptom was
+silence.** Touch was dead because the leaf drivers were `=y` while
+`MFD_INTEL_LPSS*` was `=m` - so the i2c bus itself never existed and
+there was nothing for the touch drivers to bind to. Auto-rotate was the
+mirror image: `cros_ec_lpcs` bound fine and logged "Chrome EC device
 registered", but everything downstream of it was absent, so no
-accelerometer ever appeared. **Check the whole chain, not the leaf.**
+accelerometer ever appeared. `ISO9660_FS`/`JOLIET`/`UDF_FS` were simply
+never turned on at all - not `=m`, not diffed against anything, just
+absent from a config nobody had reason to look at until something
+needed to loop-mount a `.iso`. **Check the whole chain, not the leaf -
+and check that a chain was ever built at all before assuming it was
+merely misconfigured.**
 
 The picker kernel now has `IKCONFIG`, so this is answerable directly
 rather than inferred from `dmesg`:

@@ -217,7 +217,37 @@ EOF
     ;;
     restart)  printf '#!/bin/sh\necho "POWER_ACTION=reboot"\nexit 0\n'   > "$SB/bin/nightfall" ;;
     shutdown) printf '#!/bin/sh\necho "POWER_ACTION=poweroff"\nexit 0\n' > "$SB/bin/nightfall" ;;
+    # First run asks for a live-USB boot; boot-live-iso.sh's mock always
+    # "fails" (it never really returns on success either, so from init's
+    # side that is indistinguishable from every other way of not taking) -
+    # the second run then picks a real kernel, exercising the full
+    # request-fails-then-menu-comes-back round trip.
+    liveboot) cat > "$SB/bin/nightfall" <<EOF
+#!/bin/sh
+n=\$(cat /tmp/pickruns 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > /tmp/pickruns
+if [ "\$n" = 1 ]; then
+  echo 'LIVE_BOOT_TARGET=/dev/sdb1'
+  echo 'LIVE_BOOT_ISO=ubuntu.iso'
+else
+  echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
+  echo 'SELECTED_INITRD=/boot/initrd.img-chosen'
+  echo 'SELECTED_CMDLINE=ro quiet'
+  echo 'SELECTED_BY=user'
+fi
+exit 0
+EOF
+    ;;
+    # Always asks for the same live boot - models the leash actually
+    # firing rather than a one-off failure.
+    liveboot-loop) cat > "$SB/bin/nightfall" <<'EOF'
+#!/bin/sh
+echo 'LIVE_BOOT_TARGET=/dev/sdb1'
+echo 'LIVE_BOOT_ISO=ubuntu.iso'
+exit 0
+EOF
+    ;;
   esac
+  printf '#!/bin/sh\necho "MARKER_BOOT_LIVE_ISO target=$1 iso=$2" >&2\nexit 1\n' > "$SB/bin/boot-live-iso.sh"
   chmod +x "$SB"/bin/* "$SB"/sbin/*
 
   # Applet dir for BUSYBOX mode. Placed AFTER $SB/bin in PATH so the
@@ -580,6 +610,50 @@ for junk in "" "abc" "1.5" "-100" "1500ms" "10001"; do
   setup env envdump 0 0; printf '%s\n' "$junk" > "$SB/mnt/root/boot/nightfall-splash-ms"; run
   nfe | grep -q "ENV_SPLASH_MS=unset" && ok "duration '$junk' ignored" || bad "duration '$junk' leaked: $(nfe | grep ENV_)"
 done
+
+echo "=== 19. boot a live USB: dispatched, and a failure returns to the menu ==="
+rm -f /tmp/pickruns; setup live liveboot 0 0; run
+both | grep -q "MARKER_BOOT_LIVE_ISO target=/dev/sdb1 iso=ubuntu.iso" \
+  && ok "calls boot-live-iso.sh with the drive and the ISO path" || bad "wrong call: $(both | grep MARKER_BOOT_LIVE_ISO)"
+both | grep -q "live-USB boot did not take" && ok "says so when it returns instead of kexec'ing" || bad "silent about the failure"
+both | grep -q "nothing on this machine was changed" && ok "reassures that nothing changed" || bad "no reassurance"
+both | grep -q "MARKER_KEXEC.*vmlinuz-chosen" \
+  && ok "returns to the menu and boots the next real choice" || bad "never got back to a working boot"
+
+# The one thing that actually matters here: reaching the line after the
+# pipe must be treated as failure NO MATTER the exit code, because
+# success is unreachable code (a real kexec -e never returns). A mock
+# that exits 0 must be handled identically to one that exits 1.
+rm -f /tmp/pickruns; setup live liveboot 0 0
+cat > "$SB/bin/boot-live-iso.sh" <<'EOF'
+#!/bin/sh
+echo "MARKER_BOOT_LIVE_ISO target=$1 iso=$2" >&2
+exit 0
+EOF
+chmod +x "$SB/bin/boot-live-iso.sh"
+run
+both | grep -q "live-USB boot did not take" \
+  && ok "an exit-0 return is treated exactly like a failure" || bad "an exit-0 return was treated as success"
+
+echo "=== several live-USB attempts in a row still end in a working boot ==="
+# liveboot-loop never selects a real kernel, so THIS is the test that
+# actually proves the leash stops the loop rather than merely printing a
+# message while still spinning forever - it caught exactly that bug
+# (continue placed outside the leash's else-branch) hanging the whole
+# suite the first time this was written.
+rm -f /tmp/pickruns; setup live liveboot-loop 0 0; run
+both | grep -q "too many live-USB boot attempts - booting instead" \
+  && ok "the leash fires when the request keeps repeating" || bad "no leash message: $(both | grep -i 'live-usb\|leash')"
+both | grep -q "MARKER_KEXEC.*vmlinuz-real" \
+  && ok "falls through to the default kernel rather than looping forever" \
+  || bad "never reached a boot: $(both | tail -5)"
+
+echo "=== LIVE_BOOT_TARGET does not leak into a round that never asked for it ==="
+rm -f /tmp/pickruns; setup live liveboot 0 0
+run
+sb1=$(both | grep -c "MARKER_BOOT_LIVE_ISO")
+[ "$sb1" = 1 ] && ok "boot-live-iso.sh is called exactly once, not again for the real-kernel round" \
+  || bad "called $sb1 times - a stale LIVE_BOOT_TARGET leaked into the next round"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"

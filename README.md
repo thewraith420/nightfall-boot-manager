@@ -4,14 +4,19 @@ A touch-driven boot manager for the Google Pixel Slate (`nocturne`), TWRP-style 
 replacing GRUB's mouse/keyboard-only menu with something you can actually use
 on a tablet with no keyboard attached.
 
-**Status: working end-to-end on real hardware, with nothing left unexercised.**
-Tap a kernel, confirm, and it `kexec`s straight into it. Every path has now run
-on the actual machine: touch selection, **auto-rotation in all four
-orientations**, editing and persisting per-kernel command lines, installing and
-removing kernels, backing the whole system up to an external drive **and
-restoring from it**, naming/renaming/deleting those backups, a **Repair menu**
-that replaces Ubuntu's keyboard-only recovery mode, and Restart / Power off. It
-is the machine's default GRUB entry.
+**Status: working end-to-end on real hardware, with nothing shipped left
+unexercised.** Tap a kernel, confirm, and it `kexec`s straight into it. Every
+path that has shipped has run on the actual machine: touch selection,
+**auto-rotation in all four orientations**, editing and persisting per-kernel
+command lines, installing and removing kernels, backing the whole system up
+to an external drive **and restoring from it**, naming/renaming/deleting
+those backups, a **Repair menu** that replaces Ubuntu's keyboard-only
+recovery mode, and Restart / Power off. It is the machine's default GRUB
+entry.
+
+One feature is built and tested but not yet on the machine: **booting a live
+USB** waits on a picker-kernel config change (`CONFIG_ISO9660_FS`) landing
+and being confirmed on hardware - see [Recovery](#recovery).
 
 > Renamed from `nocturne-boot-picker` on 2026-09-09. It started as a picker and
 > outgrew the word: it installs kernels, removes them, edits and remembers their
@@ -350,14 +355,20 @@ bash initramfs/test-fsck-root.sh       # unmount/remount, e2fsck's exit bitmask
 bash initramfs/test-repair.sh          # dpkg/clean/grub, and clearing overrides
 bash initramfs/test-cmdline.sh
 bash initramfs/test-discover-kernels.sh
+bash initramfs/test-discover-live-isos.sh
+bash initramfs/test-boot-live-iso.sh   # kexec -l before any unmount, everything
+                                       # torn down before kexec -e - the actual
+                                       # point of no return - and both against
+                                       # mocks, since no kernel can mount an ISO
+                                       # here yet (see Recovery, below)
 
 # Headless LVGL: keyboard z-order, dialog and keyboard layout, the 2x2 confirm
-# grid, child-process plumbing, flush-vs-touch rotation agreement, and the
-# accelerometer mapping.
+# grid, child-process plumbing, flush-vs-touch rotation agreement, the
+# accelerometer mapping, and the live-USB discover/confirm flow.
 cd ui && make test
 ```
 
-Roughly 440 assertions (294 shell, 146 headless LVGL), all of which also pass
+Roughly 580 assertions (409 shell, 173 headless LVGL), all of which also pass
 on the Slate itself — which
 matters more than it sounds: Ubuntu builds busybox with
 `FEATURE_SH_STANDALONE`, so applets resolve from busybox's own table before
@@ -485,6 +496,32 @@ still mounted, because recovery mode **is** the system on that disk, and
 `e2fsck` then refuses most repairs. Nightfall lives in the initramfs and needs
 nothing from the root once the menu is drawn, so it unmounts the root entirely
 and hands `e2fsck` a filesystem nobody is touching.
+
+**Boot a live USB** (`Back up / Restore → Boot a live USB`) closes the gap
+none of the above can: a wiped or unbootable disk. `scan-drives.sh`'s own
+header explains why the Ventoy stick can't be plugged in at boot — no
+keyboard means no way to tell the firmware to skip a bootable USB stick, so
+it has to arrive after Nightfall is already running. Until now that only let
+you back up to it or restore from it. This is the same trick GRUB+Ventoy use
+to boot an ISO that was never extracted — loop-mount the `.iso` file as
+`iso9660` and `kexec` straight into the kernel and initrd found inside it —
+done from Nightfall instead, so it needs no keyboard either. Detects Ubuntu
+and derivatives (`casper`) and Debian Live (`live-boot`); anything else is
+refused by name rather than guessed at, since a wrong guess here is a kexec
+into a kernel with no idea how to find its own root. Deliberately not quiet:
+this is a rescue boot, so trouble finding or mounting the ISO after the
+handoff has to be visible, not hidden behind Nightfall's usual splash.
+
+> **Needs `CONFIG_ISO9660_FS` (+ `JOLIET`, `UDF_FS`) in the picker kernel.**
+> All three were simply absent from the picker's config — same shape as the
+> touch and auto-rotate bugs, where a whole feature was invisible rather
+> than merely broken. The config change is prepared and compiles clean
+> against the real patch stack; it lands once a built kernel with it has
+> actually mounted an ISO on real hardware. Everything else here —
+> discovery, detection, the kexec construction, and the ordering that keeps
+> a refusal from leaving anything half-mounted — is written and tested
+> against mocks, the same way the accelerometer code was built and tested
+> before the kernel that could read one existed.
 
 **Restart and Power off** exist because there was otherwise no way to leave
 without booting a kernel — on a keyboardless tablet that meant holding the
