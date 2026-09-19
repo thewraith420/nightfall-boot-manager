@@ -246,8 +246,42 @@ echo 'LIVE_BOOT_ISO=ubuntu.iso'
 exit 0
 EOF
     ;;
+    # First run asks to boot an external drive; boot-external-drive.sh's
+    # mock fails by default (see below), so the second run then picks a
+    # real kernel - same request-fails-then-menu-comes-back shape as
+    # liveboot above, except a SUCCESS here must reboot, not kexec.
+    bootexternal) cat > "$SB/bin/nightfall" <<EOF
+#!/bin/sh
+n=\$(cat /tmp/pickruns 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > /tmp/pickruns
+if [ "\$n" = 1 ]; then
+  echo 'BOOT_EXTERNAL_PART=/dev/sda1'
+  # Single-quoted value, matching shell_quote()'s real contract - init
+  # sources this file, and an unquoted backslash would be stripped by the
+  # shell's own escape handling before BOOT_EXTERNAL_LOADER ever saw it.
+  echo "BOOT_EXTERNAL_LOADER='\EFI\BOOT\BOOTX64.EFI'"
+else
+  echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
+  echo 'SELECTED_INITRD=/boot/initrd.img-chosen'
+  echo 'SELECTED_CMDLINE=ro quiet'
+  echo 'SELECTED_BY=user'
+fi
+exit 0
+EOF
+    ;;
+    # Always asks for the same external-drive boot - models the leash
+    # actually firing rather than a one-off failure.
+    bootexternal-loop) cat > "$SB/bin/nightfall" <<'EOF'
+#!/bin/sh
+echo 'BOOT_EXTERNAL_PART=/dev/sda1'
+echo "BOOT_EXTERNAL_LOADER='\EFI\BOOT\BOOTX64.EFI'"
+exit 0
+EOF
+    ;;
   esac
   printf '#!/bin/sh\necho "MARKER_BOOT_LIVE_ISO target=$1 iso=$2" >&2\nexit 1\n' > "$SB/bin/boot-live-iso.sh"
+  # Fails by default, same convention as boot-live-iso.sh's mock above -
+  # the "arms BootNext and reboots" test overrides this to exit 0.
+  printf '#!/bin/sh\necho "MARKER_BOOT_EXTERNAL part=$1 loader=$2" >&2\nexit 1\n' > "$SB/bin/boot-external-drive.sh"
   chmod +x "$SB"/bin/* "$SB"/sbin/*
 
   # Applet dir for BUSYBOX mode. Placed AFTER $SB/bin in PATH so the
@@ -654,6 +688,44 @@ run
 sb1=$(both | grep -c "MARKER_BOOT_LIVE_ISO")
 [ "$sb1" = 1 ] && ok "boot-live-iso.sh is called exactly once, not again for the real-kernel round" \
   || bad "called $sb1 times - a stale LIVE_BOOT_TARGET leaked into the next round"
+
+echo "=== 20. boot an external drive: dispatched, and a failure returns to the menu ==="
+rm -f /tmp/pickruns; setup live bootexternal 0 0; run
+both | grep -qF 'MARKER_BOOT_EXTERNAL part=/dev/sda1 loader=\EFI\BOOT\BOOTX64.EFI' \
+  && ok "calls boot-external-drive.sh with the partition and loader" || bad "wrong call: $(both | grep MARKER_BOOT_EXTERNAL)"
+both | grep -q "external-drive boot did not take" && ok "says so when arming BootNext fails" || bad "silent about the failure"
+both | grep -q "nothing on this machine was changed" && ok "reassures that nothing changed"
+both | grep -q "MARKER_KEXEC.*vmlinuz-chosen" \
+  && ok "returns to the menu and boots the next real choice" || bad "never got back to a working boot"
+both | grep -q "MARKER_REBOOT" && bad "rebooted despite the failure" || ok "does not reboot when arming BootNext failed"
+
+echo "=== a successful boot-external-drive.sh reboots instead of returning to the menu ==="
+rm -f /tmp/pickruns; setup live bootexternal 0 0
+cat > "$SB/bin/boot-external-drive.sh" <<'EOF'
+#!/bin/sh
+echo "MARKER_BOOT_EXTERNAL part=$1 loader=$2" >&2
+exit 0
+EOF
+chmod +x "$SB/bin/boot-external-drive.sh"
+run
+both | grep -q "MARKER_REBOOT" && ok "reboots once BootNext is armed" || bad "never rebooted: $(both | tail -10)"
+both | grep -q "restarting into the external drive" && ok "says so before rebooting" || bad "no message"
+both | grep -q "MARKER_KEXEC" && bad "kexec'd instead of rebooting" || ok "does not fall through to a kexec"
+
+echo "=== several external-drive boot attempts in a row still end in a working boot ==="
+rm -f /tmp/pickruns; setup live bootexternal-loop 0 0; run
+both | grep -q "too many external-drive boot attempts - booting instead" \
+  && ok "the leash fires when the request keeps repeating" || bad "no leash message: $(both | grep -i 'external\|leash')"
+both | grep -q "MARKER_KEXEC.*vmlinuz-real" \
+  && ok "falls through to the default kernel rather than looping forever" \
+  || bad "never reached a boot: $(both | tail -5)"
+
+echo "=== BOOT_EXTERNAL_PART does not leak into a round that never asked for it ==="
+rm -f /tmp/pickruns; setup live bootexternal 0 0
+run
+sb2=$(both | grep -c "MARKER_BOOT_EXTERNAL")
+[ "$sb2" = 1 ] && ok "boot-external-drive.sh is called exactly once, not again for the real-kernel round" \
+  || bad "called $sb2 times - a stale BOOT_EXTERNAL_PART leaked into the next round"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"

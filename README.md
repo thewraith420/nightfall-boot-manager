@@ -14,9 +14,12 @@ those backups, a **Repair menu** that replaces Ubuntu's keyboard-only
 recovery mode, and Restart / Power off. It is the machine's default GRUB
 entry.
 
-One feature is built and tested but not yet on the machine: **booting a live
-USB** waits on a picker-kernel config change (`CONFIG_ISO9660_FS`) landing
-and being confirmed on hardware - see [Recovery](#recovery).
+One feature is built and tested but not yet confirmed on the machine:
+**booting an external drive** - a Ventoy stick, another live-USB tool's drive,
+or a separate OS on a USB disk - by handing the whole drive to firmware
+(UEFI `BootNext`) and restarting, the same as picking it from a firmware boot
+menu. Unlike the ISO-file approach below it, this needs no picker-kernel
+change - see [Recovery](#recovery).
 
 > Renamed from `nocturne-boot-picker` on 2026-09-09. It started as a picker and
 > outgrew the word: it installs kernels, removes them, edits and remembers their
@@ -64,9 +67,12 @@ GRUB  →  picker kernel  →  init (PID 1)  →  mount real root (ro)
       →  kexec into the chosen kernel
 ```
 
-The menu opens on four choices: **Boot a kernel**, which lists everything
-found in `grub.cfg`; **Install a kernel**, which lists kernel tarballs found
-on the real system; **Remove a kernel**; and **Back up / Restore**.
+The menu opens on four choices: **Boot**, which lists everything found in
+`grub.cfg` alongside any external drive that can be handed to firmware to
+boot directly (see [Recovery](#recovery)) - the row is not called "Boot a
+kernel" any more because it stopped being kernels-only; **Install a
+kernel**, which lists kernel tarballs found on the real system; **Remove a
+kernel**; and **Back up / Restore**.
 
 Tapping a kernel opens a confirm dialog with **Boot**, **Cancel**, **Edit**,
 **Set Default** (persist this kernel as the first entry for future boots), and
@@ -364,11 +370,11 @@ bash initramfs/test-boot-live-iso.sh   # kexec -l before any unmount, everything
 
 # Headless LVGL: keyboard z-order, dialog and keyboard layout, the 2x2 confirm
 # grid, child-process plumbing, flush-vs-touch rotation agreement, the
-# accelerometer mapping, and the live-USB discover/confirm flow.
+# accelerometer mapping, and the live-USB/external-drive discover/confirm flows.
 cd ui && make test
 ```
 
-Roughly 580 assertions (409 shell, 173 headless LVGL), all of which also pass
+Roughly 626 assertions (444 shell, 182 headless LVGL), all of which also pass
 on the Slate itself — which
 matters more than it sounds: Ubuntu builds busybox with
 `FEATURE_SH_STANDALONE`, so applets resolve from busybox's own table before
@@ -497,31 +503,55 @@ still mounted, because recovery mode **is** the system on that disk, and
 nothing from the root once the menu is drawn, so it unmounts the root entirely
 and hands `e2fsck` a filesystem nobody is touching.
 
-**Boot a live USB** (`Back up / Restore → Boot a live USB`) closes the gap
-none of the above can: a wiped or unbootable disk. `scan-drives.sh`'s own
-header explains why the Ventoy stick can't be plugged in at boot — no
-keyboard means no way to tell the firmware to skip a bootable USB stick, so
-it has to arrive after Nightfall is already running. Until now that only let
-you back up to it or restore from it. This is the same trick GRUB+Ventoy use
-to boot an ISO that was never extracted — loop-mount the `.iso` file as
-`iso9660` and `kexec` straight into the kernel and initrd found inside it —
-done from Nightfall instead, so it needs no keyboard either. Detects Ubuntu
-and derivatives (`casper`) and Debian Live (`live-boot`); anything else is
-refused by name rather than guessed at, since a wrong guess here is a kexec
-into a kernel with no idea how to find its own root. Deliberately not quiet:
-this is a rescue boot, so trouble finding or mounting the ISO after the
-handoff has to be visible, not hidden behind Nightfall's usual splash.
+**Boot an external drive** (listed right on the **Boot** screen, alongside
+installed kernels) closes the gap none of the above can: a wiped or
+unbootable disk. `scan-drives.sh`'s own header explains why a USB drive
+can't be plugged in at boot — no keyboard means no way to tell the firmware
+to skip a bootable USB stick, so it has to arrive after Nightfall is already
+running, the same reason the Rescan button exists. Rather than trying to
+understand what's on the drive, `discover-bootable-drives.sh` just looks for
+the UEFI removable-media fallback loader (`\EFI\BOOT\BOOTX64.EFI`) that a
+Ventoy stick, most live-USB-creation tools, and installed-OS installers all
+leave in place, and `boot-external-drive.sh` arms a fresh, one-shot UEFI
+`BootNext` entry pointing at it. Confirming restarts the machine — the same
+as picking the drive from a firmware boot menu (F12) by hand — and whatever
+the drive's own bootloader shows next (Ventoy's menu, a live system, an
+installed OS) is entirely its business; Nightfall never looks inside it. A
+fresh boot entry is created every time rather than matching an existing one,
+because the initramfs has no `blkid`/PARTUUID to match by; any entry left
+behind by an earlier attempt is deleted first, so repeated use doesn't
+accumulate NVRAM clutter.
+
+> **Needs nothing new in the picker kernel.** `CONFIG_EFI`, `CONFIG_EFIVAR_FS`
+> and `CONFIG_EFI_PARTITION` were already present - checked by re-extracting
+> the kernel's own embedded config rather than assumed. What's unconfirmed is
+> real hardware: it is written and tested against a mocked `efibootmgr`, the
+> same way every other shell script here is, but nobody has armed a real
+> `BootNext` from it yet.
+
+**Boot a live USB** (`Back up / Restore → Boot a live USB`) is the earlier,
+narrower answer to the same problem, kept as a secondary option rather than
+removed: loop-mount a `.iso` file as `iso9660` and `kexec` straight into the
+kernel and initrd found inside it, the same trick GRUB+Ventoy use to boot an
+ISO that was never extracted. Detects Ubuntu and derivatives (`casper`) and
+Debian Live (`live-boot`); anything else is refused by name rather than
+guessed at, since a wrong guess here is a kexec into a kernel with no idea
+how to find its own root. Deliberately not quiet: this is a rescue boot, so
+trouble finding or mounting the ISO after the handoff has to be visible, not
+hidden behind Nightfall's usual splash. Where **Boot an external drive**
+hands the whole drive to firmware sight unseen, this one is for the
+narrower case of a specific `.iso` file sitting on an otherwise-ordinary
+drive.
 
 > **Needs `CONFIG_ISO9660_FS` (+ `JOLIET`, `UDF_FS`) in the picker kernel.**
 > All three were simply absent from the picker's config — same shape as the
 > touch and auto-rotate bugs, where a whole feature was invisible rather
-> than merely broken. The config change is prepared and compiles clean
-> against the real patch stack; it lands once a built kernel with it has
-> actually mounted an ISO on real hardware. Everything else here —
-> discovery, detection, the kexec construction, and the ordering that keeps
-> a refusal from leaving anything half-mounted — is written and tested
-> against mocks, the same way the accelerometer code was built and tested
-> before the kernel that could read one existed.
+> than merely broken. The config change has been built and its IKCONFIG
+> re-verified, but nobody has booted it and mounted a real ISO with it yet.
+> Everything else here — discovery, detection, the kexec construction, and
+> the ordering that keeps a refusal from leaving anything half-mounted — is
+> written and tested against mocks, the same way the accelerometer code was
+> built and tested before the kernel that could read one existed.
 
 **Restart and Power off** exist because there was otherwise no way to leave
 without booting a kernel — on a keyboardless tablet that meant holding the

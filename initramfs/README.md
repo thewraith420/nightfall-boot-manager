@@ -8,7 +8,8 @@ on selection.
 `test-init.sh`, `test-backup.sh`, `test-restore.sh`, `test-remove-backup.sh`,
 `test-rename-backup.sh`, `test-remove-kernel.sh`, `test-fsck-root.sh`,
 `test-repair.sh`, `test-cmdline.sh`, `test-discover-kernels.sh`,
-`test-discover-live-isos.sh`, `test-boot-live-iso.sh`):
+`test-discover-live-isos.sh`, `test-boot-live-iso.sh`,
+`test-discover-bootable-drives.sh`, `test-boot-external-drive.sh`):
 
 - **Backups**: `backup-system.sh` (tar via the target's own GNU tar, source
   stays read-only), `restore-system.sh` (extracts over, never wipes),
@@ -18,11 +19,26 @@ on selection.
   repair), `repair-system.sh` (`dpkg`/`clean`/`grub`), `clear-overrides.sh`.
 - **Kernels**: `install-kernel.sh`, `remove-kernel.sh`, `discover-kernels.sh`,
   `discover-tarballs.sh`, `apply-default.sh`, `apply-cmdline.sh`.
-- **Live USB**: `discover-live-isos.sh` (lists `.iso` files, cheaply - no
-  loop-mounting just to draw a list), `boot-live-iso.sh` (loop-mounts one as
-  `iso9660`, finds a `casper` or `live-boot` layout inside it, `kexec`s in).
-  **Needs `CONFIG_ISO9660_FS`/`JOLIET`/`UDF_FS` in the picker kernel, not yet
-  landed** - see the driver table below. Everything here is tested against
+- **Boot an external drive** (the primary answer - see below for why):
+  `discover-bootable-drives.sh` (looks for the UEFI removable-media
+  fallback loader, `\EFI\BOOT\BOOTX64.EFI`, on each external drive's
+  partitions - the same path Ventoy, most live-USB tools, and installed-OS
+  installers all leave in place, and the same path a fresh boot entry
+  points at regardless of what's actually found), `boot-external-drive.sh`
+  (derives disk+partition, deletes any stale entry from a previous attempt,
+  creates a fresh `efibootmgr` boot entry, arms `BootNext`, and reads it
+  back rather than trusting the exit code). Needs nothing new in the picker
+  kernel - `CONFIG_EFI`/`CONFIG_EFIVAR_FS`/`CONFIG_EFI_PARTITION` were
+  already present, confirmed by re-extracting IKCONFIG. Tested against a
+  mocked, stateful `efibootmgr`; nobody has armed a real `BootNext` from it
+  yet.
+- **Live USB** (a secondary, narrower option, kept alongside the above
+  rather than replaced by it): `discover-live-isos.sh` (lists `.iso` files,
+  cheaply - no loop-mounting just to draw a list), `boot-live-iso.sh`
+  (loop-mounts one as `iso9660`, finds a `casper` or `live-boot` layout
+  inside it, `kexec`s in). **Needs `CONFIG_ISO9660_FS`/`JOLIET`/`UDF_FS` in
+  the picker kernel** - built and IKCONFIG-verified, not yet booted on
+  hardware - see the driver table below. Everything here is tested against
   mocked `mount`/`losetup`/`kexec`; nothing has touched a real ISO yet.
 
 - `init` - PID 1: mounts `/proc` `/sys` `/dev`, mounts the real root
@@ -282,6 +298,7 @@ not a module (`=m`):
 | backing up to a USB drive | `SCSI`, `BLK_DEV_SD`, `USB_STORAGE`, `USB_UAS`, `VFAT_FS`, `EXFAT_FS`, `NTFS3_FS`, `NLS_UTF8` |
 | auto-rotate | `MFD_CROS_EC_DEV`, `CROS_EC_SENSORHUB`, `IIO`, `IIO_BUFFER`, `IIO_TRIGGERED_BUFFER`, `IIO_CROS_EC_SENSORS_CORE`, `IIO_CROS_EC_SENSORS` |
 | booting a live USB | `BLK_DEV_LOOP` (already `=y` for other reasons), `ISO9660_FS`, `JOLIET`, `UDF_FS` |
+| booting an external drive | `EFI`, `EFIVAR_FS`, `EFI_PARTITION` - already `=y`, confirmed by IKCONFIG |
 | the entire point | `KEXEC` |
 
 **This has bitten three times now, and every time the symptom was

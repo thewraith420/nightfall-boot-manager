@@ -270,32 +270,68 @@ int main(void) {
             "#!/bin/sh\n"
             "printf '/dev/sdb1\\texfat\\t\\t931G\\t742G\\n' > \"$3\"\n"
             "printf '/dev/sdb1\\tafter-hotplug\\tnow\\t84G\\n' > \"$4\"\n"
+            "printf '/dev/sdb1\\t\\\\EFI\\\\BOOT\\\\BOOTX64.EFI\\t\\t931G\\n' > \"$5\"\n"
             "exit 0\n");
         fclose(sf); chmod("/tmp/mock-scan.sh", 0755);
         setenv("NIGHTFALL_SCAN_SH", "/tmp/mock-scan.sh", 1);
 
         snprintf(g_targets_path, sizeof(g_targets_path), "/tmp/mock-t.tsv");
         snprintf(g_backups_path, sizeof(g_backups_path), "/tmp/mock-b.tsv");
+        snprintf(g_bootable_path, sizeof(g_bootable_path), "/tmp/mock-boot.tsv");
         g_target_n = 0; g_targets = NULL;
         g_backup_n = 0; g_backups = NULL;
+        g_bootable_n = 0; g_bootable = NULL;
 
         ck(rescan_drives() == 0, "rescan runs the scan script");
         ck(g_target_n == 1, "a drive plugged in AFTER boot is now found");
         ck(!strcmp(g_targets[0].dev, "/dev/sdb1"), "with the right device");
         ck(g_backup_n == 1 && !strcmp(g_backups[0].name, "after-hotplug"),
            "and the backups on it are picked up too");
+        ck(g_bootable_n == 1 && !strcmp(g_bootable[0].dev, "/dev/sdb1"),
+           "and whether that same drive can be handed to firmware to boot");
 
         /* Unplugged again: the lists must empty, not keep stale entries
          * pointing at a device that is gone. */
         sf = fopen("/tmp/mock-scan.sh", "w");
-        fprintf(sf, "#!/bin/sh\n: > \"$3\"\n: > \"$4\"\nexit 0\n");
+        fprintf(sf, "#!/bin/sh\n: > \"$3\"\n: > \"$4\"\n: > \"$5\"\nexit 0\n");
         fclose(sf); chmod("/tmp/mock-scan.sh", 0755);
         ck(rescan_drives() == 0, "rescan runs again");
         ck(g_target_n == 0 && g_targets == NULL, "an unplugged drive disappears from the list");
         ck(g_backup_n == 0 && g_backups == NULL, "and so do its backups");
+        ck(g_bootable_n == 0 && g_bootable == NULL, "and its boot-external entry too");
 
-        remove("/tmp/mock-scan.sh"); remove("/tmp/mock-t.tsv"); remove("/tmp/mock-b.tsv");
-        g_targets_path[0] = '\0'; g_backups_path[0] = '\0';
+        remove("/tmp/mock-scan.sh"); remove("/tmp/mock-t.tsv"); remove("/tmp/mock-b.tsv"); remove("/tmp/mock-boot.tsv");
+        g_targets_path[0] = '\0'; g_backups_path[0] = '\0'; g_bootable_path[0] = '\0';
+    }
+
+    /* --- boot an external drive: discovery TSV + the confirm --- */
+    {
+        FILE *bf = fopen("/tmp/mock-bootable", "w");
+        fprintf(bf, "/dev/sda1\t\\EFI\\BOOT\\BOOTX64.EFI\t\t57G\n");
+        fprintf(bf, "/dev/sdc1\t\\EFI\\BOOT\\BOOTIA32.EFI\tRESCUE\t8G\n");
+        fclose(bf);
+        static struct bootable_drive bd[8];
+        int bn = load_bootable_drives("/tmp/mock-bootable", bd, 8);
+        ck(bn == 2, "parses one row per bootable drive");
+        ck(!strcmp(bd[0].dev, "/dev/sda1") && !strcmp(bd[0].loader, "\\EFI\\BOOT\\BOOTX64.EFI"),
+           "device and loader path round-trip");
+        ck(bd[0].label[0] == '\0', "an empty label field stays empty - the UI falls back to the device name");
+        ck(!strcmp(bd[1].label, "RESCUE"), "a real label is kept when the drive has one");
+
+        /* Confirming must end the running process the same way a live-USB
+         * or kernel choice does - via the flags the main loop's break
+         * condition reads - since this is a genuine boot (of a sort),
+         * not a child job like backup/restore. */
+        g_bootable = bd; g_bootable_n = bn;
+        g_boot_external = 0; g_boot_external_part[0] = '\0'; g_boot_external_loader[0] = '\0';
+        confirm_boot_external(1);
+        ck(g_boot_external == 1, "confirming sets the flag that ends the main loop");
+        ck(!strcmp(g_boot_external_part, "/dev/sdc1"), "records which partition, for the BOOT_EXTERNAL_PART contract");
+        ck(!strcmp(g_boot_external_loader, "\\EFI\\BOOT\\BOOTIA32.EFI"), "and which loader, for BOOT_EXTERNAL_LOADER");
+        g_boot_external = 0; g_boot_external_part[0] = '\0'; g_boot_external_loader[0] = '\0';
+
+        remove("/tmp/mock-bootable");
+        g_bootable = NULL; g_bootable_n = 0;
     }
 
     /* --- boot a live USB: discovery, scanning, and the confirm --- */

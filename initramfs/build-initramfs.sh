@@ -54,6 +54,14 @@ e2fsck_bin=$(command -v e2fsck || echo /sbin/e2fsck)
 [ -x "$e2fsck_bin" ] || die "e2fsck not found - Repair cannot check the root filesystem.
   Debian/Ubuntu: sudo apt install e2fsprogs"
 
+# efibootmgr, for boot-external-drive.sh: arms a one-shot UEFI BootNext
+# entry so firmware boots a Ventoy stick/other live USB/external OS disk
+# directly on the next restart, the same as picking it from a firmware
+# boot menu. Small (~350KB with its two shared libraries) next to e2fsck.
+efibootmgr_bin=$(command -v efibootmgr || echo /usr/sbin/efibootmgr)
+[ -x "$efibootmgr_bin" ] || die "efibootmgr not found - cannot boot external drives.
+  Debian/Ubuntu: sudo apt install efibootmgr"
+
 kexec_bin=$(command -v kexec || true)
 [ -n "$kexec_bin" ] || die "kexec not found - Nightfall's whole job is to kexec.
   Debian/Ubuntu: sudo apt install kexec-tools"
@@ -71,6 +79,7 @@ for f in "$here/init" "$here/discover-kernels.sh" "$here/apply-default.sh" \
          "$here/repair-system.sh" "$here/clear-overrides.sh" \
          "$here/discover-backups.sh" "$here/scan-drives.sh" \
          "$here/discover-live-isos.sh" "$here/boot-live-iso.sh" \
+         "$here/discover-bootable-drives.sh" "$here/boot-external-drive.sh" \
          "$repo/boot-integration/kexec-boot.sh"; do
     [ -r "$f" ] || die "missing source file: $f"
 done
@@ -95,6 +104,7 @@ ln -sf ../bin/busybox "$staging/sbin/mdev"
 
 install -m 0755 "$kexec_bin" "$staging/sbin/kexec"
 install -m 0755 "$e2fsck_bin" "$staging/sbin/e2fsck"
+install -m 0755 "$efibootmgr_bin" "$staging/sbin/efibootmgr"
 ln -sf ../sbin/kexec "$staging/bin/kexec"
 install -m 0755 "$nightfall_bin" "$staging/bin/nightfall"
 
@@ -146,7 +156,7 @@ copy_libs_for() {
 
 say "resolving shared libraries"
 for b in "$staging/bin/busybox" "$staging/sbin/kexec" "$staging/bin/nightfall" \
-         "$staging/sbin/e2fsck"; do
+         "$staging/sbin/e2fsck" "$staging/sbin/efibootmgr"; do
     echo "  $(basename "$b"):"
     copy_libs_for "$b"
 done

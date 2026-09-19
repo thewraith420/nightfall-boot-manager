@@ -133,6 +133,18 @@ struct live_iso {
     char name[128];   /* bare filename, for display */
 };
 
+/* A whole external drive that can be handed to FIRMWARE to boot next -
+ * a Ventoy stick, another live-USB tool's drive, or a separate OS on an
+ * external disk - found by discover-bootable-drives.sh. `loader` is the
+ * UEFI removable-media fallback path on `dev` (e.g. '\EFI\BOOT\BOOTX64.EFI'),
+ * exactly what boot-external-drive.sh points a fresh boot entry at. */
+struct bootable_drive {
+    char dev[128];
+    char loader[64];
+    char label[64];
+    char size[16];
+};
+
 /* ---------------- menu.tsv ---------------- */
 
 static int load_entries(const char *path, struct entry *entries, int max) {
@@ -236,6 +248,27 @@ static int load_backups(const char *path, struct backup *b, int max) {
         snprintf(b[n].name, sizeof(b[n].name), "%.127s", f[1]);
         snprintf(b[n].when, sizeof(b[n].when), "%.63s", f[2] ? f[2] : "unknown");
         snprintf(b[n].size, sizeof(b[n].size), "%.15s", f[3] ? f[3] : "?");
+        n++;
+    }
+    fclose(fp);
+    return n;
+}
+
+/* dev\tloader\tlabel\tsize, one per line - discover-bootable-drives.sh's
+ * own contract (same shape as load_targets, different fields). */
+static int load_bootable_drives(const char *path, struct bootable_drive *d, int max) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+    char line[600];
+    int n = 0;
+    while (n < max && fgets(line, sizeof(line), fp)) {
+        line[strcspn(line, "\n")] = '\0';
+        char *f[4] = {0};
+        if (split_tsv(line, f, 4) < 2 || !f[0] || !*f[0] || !f[1] || !*f[1]) continue;
+        snprintf(d[n].dev, sizeof(d[n].dev), "%.127s", f[0]);
+        snprintf(d[n].loader, sizeof(d[n].loader), "%.63s", f[1]);
+        snprintf(d[n].label, sizeof(d[n].label), "%.63s", f[2] ? f[2] : "");
+        snprintf(d[n].size, sizeof(d[n].size), "%.15s", f[3] ? f[3] : "?");
         n++;
     }
     fclose(fp);
@@ -1737,6 +1770,8 @@ static struct target *g_targets;
 static int g_target_n;
 static struct backup *g_backups;
 static int g_backup_n;
+static struct bootable_drive *g_bootable;
+static int g_bootable_n;
 
 /* Re-runs drive discovery while the picker is running.
  *
@@ -1758,11 +1793,12 @@ static const char *scan_script(void) {
 
 static char g_targets_path[256];
 static char g_backups_path[256];
+static char g_bootable_path[256];
 
 static int rescan_drives(void) {
     const char *script = scan_script();
     if (access(script, X_OK) != 0) return -1;
-    if (!g_targets_path[0] || !g_backups_path[0]) return -1;
+    if (!g_targets_path[0] || !g_backups_path[0] || !g_bootable_path[0]) return -1;
 
     const char *rootdev = getenv("REAL_ROOT_DEV");
     const char *rootmnt = getenv("NIGHTFALL_ROOT");
@@ -1778,20 +1814,23 @@ static int rescan_drives(void) {
         execl(script, script,
               rootdev ? rootdev : "/dev/mmcblk0p2",
               rootmnt ? rootmnt : "/mnt/root",
-              g_targets_path, g_backups_path, (char *)NULL);
+              g_targets_path, g_backups_path, g_bootable_path, (char *)NULL);
         _exit(127);
     }
     int st = 0;
     waitpid(pid, &st, 0);
     if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) return -1;
 
-    /* Reload both lists from what the scan just wrote. */
+    /* Reload all three lists from what the scan just wrote. */
     static struct target targets[16];
     static struct backup backups[64];
+    static struct bootable_drive bootables[16];
     g_target_n = load_targets(g_targets_path, targets, 16);
     g_targets = g_target_n ? targets : NULL;
     g_backup_n = load_backups(g_backups_path, backups, 64);
     g_backups = g_backup_n ? backups : NULL;
+    g_bootable_n = load_bootable_drives(g_bootable_path, bootables, 16);
+    g_bootable = g_bootable_n ? bootables : NULL;
     return 0;
 }
 
@@ -2419,7 +2458,18 @@ static void show_main_menu(void) {
     lv_label_set_text(g_header, LV_SYMBOL_POWER "  Nightfall Boot Manager");
 
     char buf[96];
-    snprintf(buf, sizeof(buf), "Boot a kernel   (%d installed)", count_bootable_rows());
+    /* "Boot", not "Boot a kernel": the same row now leads to installed
+     * kernels AND external drives found by discover-bootable-drives.sh
+     * (a Ventoy stick, another live-USB drive, a separate OS on a USB
+     * disk) - it stopped being kernels-only the day a drive could be
+     * offered from here too. */
+    if (g_bootable_n > 0)
+        snprintf(buf, sizeof(buf), "Boot   (%d kernel%s, %d drive%s)",
+                 count_bootable_rows(), count_bootable_rows() == 1 ? "" : "s",
+                 g_bootable_n, g_bootable_n == 1 ? "" : "s");
+    else
+        snprintf(buf, sizeof(buf), "Boot   (%d kernel%s installed)",
+                 count_bootable_rows(), count_bootable_rows() == 1 ? "" : "s");
     lv_obj_t *b = make_row_h(LV_SYMBOL_USB, buf, 0, MENU_ROW_H);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_kernel_list);
 
@@ -2464,7 +2514,57 @@ static void rescan_cb(lv_event_t *e) {
     lv_refr_now(NULL);
 
     rescan_drives();
-    show_backup_menu();
+    void (*rescan_back_to)(void) = (void (*)(void))lv_event_get_user_data(e);
+    (rescan_back_to ? rescan_back_to : show_backup_menu)();
+}
+
+/* ---------------- Boot an external drive ----------------
+ *
+ * Hands the WHOLE drive to firmware, instead of Nightfall trying to
+ * understand what is on it - a Ventoy stick (which then shows Ventoy's
+ * own menu), any other live-USB-creation-tool drive, or a separate OS
+ * installed on an external disk. See boot-external-drive.sh's own header
+ * for the mechanism (a one-shot UEFI BootNext entry).
+ *
+ * Unlike Boot a live USB, this is NOT a kexec and does not end this
+ * process the way a kernel choice does: boot-external-drive.sh only arms
+ * BootNext, and getting to the drive from there needs an actual reboot -
+ * init performs it, the same reboot sequence Restart already uses, once
+ * BootNext is confirmed armed. See initramfs/init. */
+static int g_boot_external;
+static char g_boot_external_part[128];
+static char g_boot_external_loader[64];
+
+/* The testable core, same split as confirm_live_boot(): the *_cb wrapper
+ * only unwraps the LVGL event, this does the actual work. */
+static void confirm_boot_external(int idx) {
+    snprintf(g_boot_external_part, sizeof(g_boot_external_part), "%.127s", g_bootable[idx].dev);
+    snprintf(g_boot_external_loader, sizeof(g_boot_external_loader), "%.63s", g_bootable[idx].loader);
+    g_boot_external = 1;
+}
+
+static void boot_external_go_cb(lv_event_t *e) {
+    lv_obj_t *mbox = lv_event_get_user_data(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(mbox);
+    lv_msgbox_close_async(mbox);
+    confirm_boot_external(idx);
+}
+
+static void boot_external_click_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    char body[400];
+    snprintf(body, sizeof(body),
+             "%.60s  (%.16s)\n\n"
+             "This machine will restart and boot straight from this "
+             "drive - the same as choosing it from a firmware boot menu. "
+             "Nightfall does not look at what is on it: whatever the "
+             "drive's own bootloader shows next (a Ventoy menu, a live "
+             "system, an installed OS) is what you will see.\n\n"
+             "Nothing on this machine is changed.",
+             g_bootable[idx].label[0] ? g_bootable[idx].label : g_bootable[idx].dev,
+             g_bootable[idx].size);
+    simple_confirm(idx, "Restart into this drive?", body, "Restart", boot_external_go_cb, 0);
+    screenshot_soon("boot-external-drive-dialog");
 }
 
 /* Each repair is a confirm then a child, so they share one pattern. The
@@ -2882,10 +2982,24 @@ static void show_remove_list(void) {
     }
 }
 
+/* Renamed from "Select a kernel to boot": this screen now lists every
+ * way to boot something, not only installed kernels - an installed
+ * kernel and an external drive found by discover-bootable-drives.sh
+ * (Ventoy stick, other live-USB drive, separate OS on a USB disk) sit in
+ * the same list, because from here they are genuinely the same kind of
+ * choice: pick one, this machine boots into it. */
 static void show_kernel_list(void) {
     lv_obj_clean(g_list);
-    lv_label_set_text(g_header, LV_SYMBOL_USB "  Select a kernel to boot");
+    lv_label_set_text(g_header, LV_SYMBOL_USB "  Boot");
     add_back_row(show_main_menu);
+
+    /* Drives cannot be present at boot - see scan-drives.sh's own header -
+     * so unlike the kernel list above, this can go stale the moment
+     * something is plugged in after Nightfall started. Same affordance
+     * Back up/Restore already has, just also offered here now that this
+     * screen is where a drive's boot option actually shows up. */
+    lv_obj_t *rs = make_row(LV_SYMBOL_REFRESH, "Rescan for drives", 0);
+    lv_obj_add_event_cb(rs, rescan_cb, LV_EVENT_CLICKED, (void *)show_kernel_list);
 
     for (int i = 0; i < g_entry_n; i++) {
         /* Recovery variants live in their kernel's confirm dialog. */
@@ -2916,6 +3030,15 @@ static void show_kernel_list(void) {
             lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -16, 0);
         }
         lv_obj_add_event_cb(btn, row_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+
+    for (int i = 0; i < g_bootable_n; i++) {
+        char row[220];
+        snprintf(row, sizeof(row), "%.40s   %.10s   hands off to firmware",
+                 g_bootable[i].label[0] ? g_bootable[i].label : g_bootable[i].dev,
+                 g_bootable[i].size);
+        lv_obj_t *b = make_row(LV_SYMBOL_DRIVE, row, 0);
+        lv_obj_add_event_cb(b, boot_external_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
 }
 
@@ -3184,7 +3307,7 @@ static int wait_for_device(const char *what, struct drm_dev *drm, struct touch_d
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <menu.tsv> [tarballs.tsv] [saved-cmdline.tsv] [targets.tsv] [backups.tsv]\n", argv[0]);
+        fprintf(stderr, "usage: %s <menu.tsv> [tarballs.tsv] [saved-cmdline.tsv] [targets.tsv] [backups.tsv] [bootable.tsv]\n", argv[0]);
         return 2;
     }
 
@@ -3221,6 +3344,12 @@ int main(int argc, char **argv) {
         snprintf(g_backups_path, sizeof(g_backups_path), "%.255s", argv[5]);
         g_backup_n = load_backups(argv[5], backups, 64);
         g_backups = g_backup_n ? backups : NULL;
+    }
+    static struct bootable_drive bootables[16];
+    if (argc > 6) {
+        snprintf(g_bootable_path, sizeof(g_bootable_path), "%.255s", argv[6]);
+        g_bootable_n = load_bootable_drives(argv[6], bootables, 16);
+        g_bootable = g_bootable_n ? bootables : NULL;
     }
 
     /* Booted from the initramfs we are in a footrace with driver probe:
@@ -3453,7 +3582,7 @@ int main(int argc, char **argv) {
             install_pump(inst_buf, sizeof(inst_buf), &inst_len);
         }
 
-        if (g_selected >= 0 || g_install >= 0 || g_reload || g_power_action || g_live_boot) break;
+        if (g_selected >= 0 || g_install >= 0 || g_reload || g_power_action || g_live_boot || g_boot_external) break;
 
         if (fds[touch_idx].revents & POLLIN) {
             struct input_event ev;
@@ -3585,6 +3714,19 @@ int main(int argc, char **argv) {
         shell_quote(stdout, "LIVE_BOOT_ISO", g_live_iso_path);
         fprintf(stderr, "nightfall: live-USB boot requested: %s on %s\n",
                 g_live_iso_path, g_live_target_dev);
+        return 0;
+    }
+
+    if (g_boot_external) {
+        /* Also its own contract: this names a whole drive plus the
+         * loader firmware should run on it, not a kernel/initrd path -
+         * and unlike every case above, success here does not end at
+         * kexec. init runs boot-external-drive.sh to arm BootNext and
+         * then has to reboot for it to take effect - see initramfs/init. */
+        shell_quote(stdout, "BOOT_EXTERNAL_PART", g_boot_external_part);
+        shell_quote(stdout, "BOOT_EXTERNAL_LOADER", g_boot_external_loader);
+        fprintf(stderr, "nightfall: external-drive boot requested: %s (%s)\n",
+                g_boot_external_part, g_boot_external_loader);
         return 0;
     }
 

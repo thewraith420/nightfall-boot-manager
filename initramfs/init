@@ -8,6 +8,14 @@ mount -t devtmpfs none /dev
 mkdir -p /dev/pts
 mount -t devpts none /dev/pts
 
+# Needed for boot-external-drive.sh's efibootmgr to read/write NVRAM
+# boot variables at all - not mounted automatically without systemd.
+# Best-effort: a BIOS-only machine (or a kernel without CONFIG_EFIVAR_FS)
+# has no /sys/firmware/efi to mount here, which just means efibootmgr
+# fails later and that path warns instead of ending Nightfall.
+mkdir -p /sys/firmware/efi/efivars 2>/dev/null
+mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
+
 mdev -s
 
 mkdir -p /run/nightfall /mnt/root
@@ -471,9 +479,10 @@ export NIGHTFALL_ROTATE
 # firmware booting a bootable USB stick instead of the picker. So this
 # is the first look, not the only one.
 /bin/scan-drives.sh "$REAL_ROOT_DEV" /mnt/root \
-    /run/nightfall/targets.tsv /run/nightfall/backups.tsv 2>/dev/null || {
+    /run/nightfall/targets.tsv /run/nightfall/backups.tsv /run/nightfall/bootable.tsv 2>/dev/null || {
         : > /run/nightfall/targets.tsv
         : > /run/nightfall/backups.tsv
+        : > /run/nightfall/bootable.tsv
     }
 
 # grub.cfg changes when a kernel is installed, so the menu has to be
@@ -495,7 +504,7 @@ refresh_menu() {
     # exactly like the delete having done nothing. Nightfall never
     # mounts anything itself, so this has to happen out here.
     /bin/scan-drives.sh "$REAL_ROOT_DEV" /mnt/root \
-        /run/nightfall/targets.tsv /run/nightfall/backups.tsv 2>/dev/null || :
+        /run/nightfall/targets.tsv /run/nightfall/backups.tsv /run/nightfall/bootable.tsv 2>/dev/null || :
 }
 
 # Installing a kernel returns to the menu rather than booting, so the
@@ -522,10 +531,16 @@ reload_rounds=0
 # re-firing must not become a loop that never lets the menu back on
 # screen.
 live_boot_rounds=0
+# Arming a firmware boot has the same genuine, ordinary failure modes as
+# a live-USB boot (drive unplugged, efibootmgr refuses) plus one of its
+# own (no efivarfs - see the mount attempt above) - bounded for the same
+# reason: a repeating request must not become a loop the menu never
+# comes back from.
+boot_external_rounds=0
 while :; do
 stage "running nightfall"
 if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_FILE" \
-        /run/nightfall/targets.tsv /run/nightfall/backups.tsv \
+        /run/nightfall/targets.tsv /run/nightfall/backups.tsv /run/nightfall/bootable.tsv \
         > /run/nightfall/selected 2>/run/nightfall/nightfall.stderr; then
     nightfall_rc=0
     # Sets SELECTED_LINUX/INITRD/CMDLINE and SELECTED_BY, or SET_DEFAULT=1
@@ -536,6 +551,8 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
     POWER_ACTION=
     LIVE_BOOT_TARGET=
     LIVE_BOOT_ISO=
+    BOOT_EXTERNAL_PART=
+    BOOT_EXTERNAL_LOADER=
     SET_CMDLINE=
     . /run/nightfall/selected
 
@@ -607,6 +624,54 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
             continue
         fi
         warn "too many live-USB boot attempts - booting instead"
+    fi
+
+    # Boot an external drive - hand the WHOLE drive to firmware instead of
+    # trying to understand what's on it (a Ventoy stick, another live-USB
+    # tool's drive, a separate OS on a USB disk). Its own contract, not
+    # LIVE_BOOT_TARGET: this names a partition plus the loader path
+    # firmware should run, not a kernel/initrd/ISO. See
+    # boot-external-drive.sh's own header for the mechanism.
+    #
+    # Unlike live-USB boot, success here does NOT end in a kexec -
+    # boot-external-drive.sh only arms a one-shot UEFI BootNext entry, so
+    # getting to the drive from here needs an actual restart, which this
+    # does itself using the same sequence POWER_ACTION=reboot uses above.
+    # Deliberately NOT exec'd, same reasoning as boot-live-iso.sh: a
+    # failure here is ordinary (drive unplugged, no efivarfs, efibootmgr
+    # refuses) and must return to the menu, not take PID 1 down with it.
+    if [ -n "$BOOT_EXTERNAL_PART" ]; then
+        boot_external_rounds=$((boot_external_rounds + 1))
+        # continue lives ONLY inside this branch, same shape as every
+        # other leashed action above - outside it, the loop would keep
+        # spinning even after the leash trips.
+        if [ "$boot_external_rounds" -le 3 ]; then
+            stage "arming a firmware boot into $BOOT_EXTERNAL_PART"
+            echo "" >&2
+            echo "nightfall: preparing to boot an external drive..." >&2
+            # Pipeline exit status is tee's, not the script's - the same
+            # trap INSTALL_TARBALL's own dance below exists to avoid - so
+            # the real status comes back through a file instead.
+            { /bin/boot-external-drive.sh "$BOOT_EXTERNAL_PART" "$BOOT_EXTERNAL_LOADER" 2>&1; \
+              echo $? > /run/nightfall/boot-external.rc; } \
+              | tee -a /run/nightfall/boot-external.log >&2
+            if [ "$(cat /run/nightfall/boot-external.rc 2>/dev/null || echo 1)" = 0 ]; then
+                stage "BootNext armed - restarting into $BOOT_EXTERNAL_PART"
+                save_log "restarting into $BOOT_EXTERNAL_PART" 2>/dev/null || :
+                sync
+                umount /mnt/root 2>/dev/null || :
+                sync
+                echo "nightfall: restarting into the external drive" >&2
+                reboot -f
+                sleep 10
+                rescue "restart did not take effect after arming an external-drive boot"
+            fi
+            warn "external-drive boot did not take - see the messages above"
+            echo "nightfall: nothing on this machine was changed." >&2
+            sleep "${NIGHTFALL_FALLBACK_PAUSE:-8}"
+            continue
+        fi
+        warn "too many external-drive boot attempts - booting instead"
     fi
 
     if [ -n "$RELOAD" ]; then
