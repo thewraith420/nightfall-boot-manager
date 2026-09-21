@@ -806,14 +806,27 @@ run_selfdiscover
 log | grep -qF "mounting real root ($SB/dev/discovered-root)" \
   && ok "mounts what the retry eventually found" || bad "wrong root: $(log | grep 'mounting real root')"
 
-echo "=== giving up falls back to the internal eMMC, with a warning - not silently ==="
+echo "=== giving up on a build meant to roam goes to rescue - NEVER guesses the internal eMMC ==="
+# A build carrying an id is explicitly one meant to run on more than one
+# machine (Bob's portable stick) - falling back to /dev/mmcblk0p2 here
+# would mean silently mounting, logging to, and scanning whatever real
+# disk happens to answer to that name on WHATEVER machine this actually
+# is. Most PCs don't have one, but another eMMC device (another
+# Chromebook) could - and that would be mounted for real. A rescue shell
+# is the correct failure here, not a guess. Caught reviewing real
+# hardware testing, not anticipated up front.
 setup happy ok 0 0
 mkdir -p "$SB/etc"; echo "BUILD-XYZ" > "$SB/etc/nightfall-build-id"
 W=1 run_selfdiscover
 both | grep -q "could not find a disk matching this build" \
-  && ok "warns before falling back" || bad "no warning: $(both | grep -i 'could not find')"
+  && ok "warns about the failed search" || bad "no warning: $(both | grep -i 'could not find')"
+both | grep -q "MARKER_RESCUE_SHELL_REACHED" \
+  && ok "drops to rescue rather than guessing which disk to mount" || bad "did not reach rescue"
+both | grep -q "MARKER_KEXEC" \
+  && bad "booted something instead of refusing to guess" || ok "does not kexec anything"
 log | grep -qF "mounting real root (/dev/mmcblk0p2)" \
-  && ok "falls back to the historical hardcoded default" || bad "wrong fallback: $(log | grep 'mounting real root')"
+  && bad "mounted the hardcoded default anyway - exactly what this must never do for a roaming build" \
+  || ok "never touches the internal eMMC's device path at all"
 
 echo "=== no build-id in this image (an older build) falls back immediately ==="
 setup happy ok 0 0

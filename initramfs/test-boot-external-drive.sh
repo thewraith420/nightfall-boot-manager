@@ -19,8 +19,18 @@ setup() {
   : > "$SB/dev/mmcblk0" ; : > "$SB/dev/mmcblk0p1"
   ENTRIES="$SB/entries"    # num<TAB>label<TAB>disk<TAB>part<TAB>loader
   BOOTNEXT="$SB/bootnext"
+  BOOTORDER="$SB/bootorder"
   LOG="$SB/log"
   : > "$ENTRIES"; : > "$BOOTNEXT"; : > "$LOG"
+  # A realistic pre-existing order, standing in for "whatever this
+  # machine's normal boot sequence already was" - the exact thing that
+  # must come back unchanged once the script is done. Deliberately none
+  # of next_num()'s low numbers (it always starts handing out 0001,
+  # 0002, ... against an empty $ENTRIES): a real efibootmgr can never
+  # assign a new entry a number already in use anywhere, but this mock
+  # only checks $ENTRIES, so a collision here would make a freshly
+  # created entry indistinguishable from an unrelated pre-existing one.
+  printf '0010,0020,0030,0040,0050,0060' > "$BOOTORDER"
 }
 teardown() { rm -rf "$SB"; }
 
@@ -39,7 +49,7 @@ write_mock() {
   cat > "$SB/bin/efibootmgr" <<EOF
 #!/bin/bash
 echo "efibootmgr \$*" >> "$LOG"
-ENTRIES="$ENTRIES"; BOOTNEXT="$BOOTNEXT"
+ENTRIES="$ENTRIES"; BOOTNEXT="$BOOTNEXT"; BOOTORDER="$BOOTORDER"
 
 next_num() {
   n=\$(awk -F'\t' 'BEGIN{m=0} {v=strtonum("0x" \$1); if (v>m) m=v} END{printf "%04X", m+1}' "\$ENTRIES")
@@ -50,7 +60,7 @@ print_list() {
   echo "BootCurrent: 0000"
   bn=\$(cat "\$BOOTNEXT" 2>/dev/null)
   [ -n "\$bn" ] && echo "BootNext: \$bn"
-  echo "BootOrder: 0000"
+  echo "BootOrder: \$(cat "\$BOOTORDER" 2>/dev/null)"
   while IFS=\$'\t' read -r num label disk part loader; do
     [ -n "\$num" ] || continue
     echo "Boot\${num}* \${label}"
@@ -76,6 +86,12 @@ case "\$1" in
     fi
     n=\$(next_num)
     printf '%s\t%s\t%s\t%s\t%s\n' "\$n" "\$l" "\$d" "\$p" "\$lo" >> "\$ENTRIES"
+    # Real efibootmgr prepends a freshly created entry to BootOrder - not
+    # a no-op the way an earlier version of this mock modelled it, and
+    # exactly the behaviour that caught a real bug in boot-external-drive.sh.
+    cur=\$(cat "\$BOOTORDER" 2>/dev/null)
+    if [ -n "\$cur" ]; then printf '%s,%s' "\$n" "\$cur" > "\$BOOTORDER"
+    else printf '%s' "\$n" > "\$BOOTORDER"; fi
     print_list
     exit 0
     ;;
@@ -84,6 +100,12 @@ case "\$1" in
     if [ "\$3" = "-B" ]; then
       grep -vE "^\${num}"\$'\t' "\$ENTRIES" > "\$ENTRIES.tmp" || true
       mv "\$ENTRIES.tmp" "\$ENTRIES"
+      # Real efibootmgr also drops a deleted entry out of BootOrder - a
+      # dangling reference to a Boot#### that no longer exists would
+      # otherwise be left behind.
+      cur=\$(cat "\$BOOTORDER" 2>/dev/null)
+      new=\$(printf '%s' "\$cur" | tr ',' '\n' | grep -vx "\$num" | tr '\n' ',' | sed 's/,\$//')
+      printf '%s' "\$new" > "\$BOOTORDER"
       exit 0
     fi
     ;;
@@ -92,6 +114,10 @@ case "\$1" in
     if [ -z "$noop_bootnext" ]; then
       echo "\$num" > "\$BOOTNEXT"
     fi
+    exit 0
+    ;;
+  -o)
+    printf '%s' "\$2" > "\$BOOTORDER"
     exit 0
     ;;
   "")
@@ -117,6 +143,9 @@ out=$(run 2>&1); rc=$?
 grep -q 'BootNext armed' <<<"$out" && ok "says BootNext was armed" || bad "no confirmation message: $out"
 grep -qF "Nightfall-boot-once" "$ENTRIES" && ok "left exactly the entry it created behind" || bad "entries file wrong: $(cat "$ENTRIES")"
 bn=$(cat "$BOOTNEXT"); [ -n "$bn" ] && grep -q "^${bn}"$'\t' "$ENTRIES" && ok "BootNext points at the entry it just made" || bad "BootNext ($bn) does not match: $(cat "$ENTRIES")"
+[ "$(cat "$BOOTORDER")" = "0010,0020,0030,0040,0050,0060" ] \
+  && ok "BootOrder is restored to exactly what it was - efibootmgr -c prepending our entry does not stick" \
+  || bad "BootOrder was left changed: $(cat "$BOOTORDER")"
 teardown
 
 echo "=== a stale entry from a previous attempt is removed first ==="
@@ -152,6 +181,9 @@ out=$(run 2>&1); rc=$?
 [ "$rc" != 0 ] && ok "exits non-zero (BootNext never actually changed)" || bad "should have failed: $out"
 grep -q 'did not take' <<<"$out" && ok "says BootNext did not take" || bad "wrong message: $out"
 [ -s "$ENTRIES" ] && bad "the entry it created was not cleaned up after the failure: $(cat "$ENTRIES")" || ok "the just-created entry was rolled back"
+[ "$(cat "$BOOTORDER")" = "0010,0020,0030,0040,0050,0060" ] \
+  && ok "BootOrder ends up back to normal too (the rollback's own delete cleans it)" \
+  || bad "BootOrder left with a dangling reference: $(cat "$BOOTORDER")"
 teardown
 
 echo "=== a device with no trailing partition number is refused up front ==="

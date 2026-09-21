@@ -21,11 +21,20 @@
 # distro's own, the installed OS's own) take it from there.
 #
 # HOW: efibootmgr creates a fresh UEFI boot entry pointing at the loader
-# already found on the drive, arms it with BootNext (one-shot - it does
-# not touch BootOrder, so if the boot never happens for any reason, the
-# NEXT reboot just falls through to the normal order). This script's job
-# ends there - init still owns the actual reboot, the same way
-# boot-live-iso.sh does the kexec but init decides when to call it.
+# already found on the drive, arms it with BootNext (one-shot), and this
+# script's job ends there - init still owns the actual reboot, the same
+# way boot-live-iso.sh does the kexec but init decides when to call it.
+#
+# BootOrder is deliberately put back exactly as found. `efibootmgr -c`
+# does NOT leave BootOrder alone - confirmed on real hardware, contrary
+# to what an earlier version of this comment assumed - it prepends the
+# entry it just created. Left alone, a boot that used BootNext once would
+# permanently add a "boot this drive" entry to the front of someone's
+# normal boot sequence, which is a far bigger footprint on THEIR firmware
+# than the "temporary" this is supposed to be. BootNext does not need the
+# entry to be IN BootOrder to work as a one-shot override, so the fix
+# costs nothing: read BootOrder before creating anything, restore that
+# exact value once BootNext is confirmed armed.
 #
 # A fresh entry is created every time rather than reusing one already in
 # NVRAM: matching an existing entry to a partition would need blkid or
@@ -81,6 +90,11 @@ diskdev="$partdir/$disk"
 
 say "target: disk=$diskdev partition=$partnum loader=$loader"
 
+# Captured before anything else touches NVRAM, so restoring it later puts
+# BootOrder back to exactly what it was - not "everything except our
+# entry" computed some other way, the literal original value.
+orig_order=$($EFIBOOTMGR 2>/dev/null | grep -oE '^BootOrder: .*' | cut -d' ' -f2) || orig_order=""
+
 # Cleanup first: any earlier boot-external-drive.sh entry left behind (an
 # attempt that armed BootNext but, for whatever reason, never got to
 # reboot) would otherwise accumulate forever - efibootmgr has no notion of
@@ -114,6 +128,17 @@ confirmed=$($EFIBOOTMGR 2>/dev/null | grep -iE '^BootNext:' | grep -ioE '[0-9A-F
 if [ "$(printf '%s' "$confirmed" | tr a-f A-F)" != "$(printf '%s' "$bootnum" | tr a-f A-F)" ]; then
     $EFIBOOTMGR -b "$bootnum" -B >/dev/null 2>&1 || say "WARNING: could not remove Boot$bootnum after BootNext failed to confirm"
     die "BootNext did not take (read back '$confirmed', expected '$bootnum') - the new entry was removed, nothing else was changed"
+fi
+
+
+# Best-effort, and deliberately not a failure if it doesn't take: BootNext
+# is already confirmed armed above, which is the part that actually has to
+# work for this boot. Leaving BootOrder with our entry prepended would be
+# a real, if lesser, problem the NEXT time firmware boots normally - but
+# it is not a reason to unwind an already-successful BootNext.
+if [ -n "$orig_order" ]; then
+    $EFIBOOTMGR -o "$orig_order" >/dev/null 2>&1 || \
+        say "WARNING: could not restore the original BootOrder (BootNext is still armed correctly)"
 fi
 
 say "BootNext armed: this machine will boot from $part ($loader) on the next reboot"
