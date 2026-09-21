@@ -447,12 +447,13 @@ default_cmdline=$(printf '%s' "$default_line" | cut -f4)
 # Starting orientation and auto-rotate, settable from /boot - same
 # pattern and same reasons as nightfall-timeout above.
 #
-# ORDER MATTERS HERE. This runs BEFORE the := default below, so a valid
-# file sets NIGHTFALL_ROTATE and := leaves it alone, while an absent or
-# invalid one leaves it unset and := supplies 270. Nightfall's own parser
-# maps anything that is not exactly 90/180/270 to ROT_0 - a sensible
-# library default and the wrong one for this panel, where 0 is sideways -
-# so garbage must never be passed through to reach it.
+# ORDER MATTERS HERE. This runs BEFORE the board-based default below, so a
+# valid file sets NIGHTFALL_ROTATE and the default leaves it alone, while an
+# absent or invalid one leaves it unset and the default supplies 270 (a
+# Nocturne) or 0 (anything else). Nightfall's own parser maps anything that
+# is not exactly 90/180/270 to ROT_0 - a sensible library default and the
+# wrong one for the Slate panel, where 0 is sideways - so garbage must never
+# be passed through to reach it.
 #
 # Lower stakes than the timeout, and deliberately treated that way: a
 # wrong orientation is sideways but still usable, since touch goes
@@ -530,7 +531,37 @@ if [ -f "$SPLASH_MS_FILE" ]; then
     esac
 fi
 
-: "${NIGHTFALL_ROTATE:=270}"
+# The default for a rotation nobody set (no /boot/nightfall-rotate file, no
+# NIGHTFALL_ROTATE on the kernel command line). 270 is right for exactly one
+# machine - the Slate's panel is mounted rotated - and sideways on every
+# other: this image used to be built for that one machine only, so a flat
+# 270 was correct. It is not now. So: 270 for a board that says it is a
+# Nocturne, 0 for any board that says it is something else.
+#
+# FAIL-SAFE FOR THE SLATE, deliberately: if the board name cannot be read at
+# all (no /sys/class/dmi/id - a kernel without CONFIG_DMIID, which the Slate
+# picker kernel does have, but that is exactly the kind of thing that gets
+# stripped later) the answer is still 270, the historical behaviour. Only a
+# board that POSITIVELY identifies as not-a-Nocturne gets 0, so nothing that
+# worked on the Slate can start coming up sideways because a sysfs file went
+# missing. An empty-but-readable name (some VMs) counts as "not a Nocturne".
+if [ -z "${NIGHTFALL_ROTATE:-}" ]; then
+    _board=""
+    _board_known=""
+    if [ -r /sys/class/dmi/id/board_name ]; then
+        _board_known=1
+        # `|| :`, not `|| _board=""` - same newline-less-file gotcha as above.
+        read -r _board < /sys/class/dmi/id/board_name 2>/dev/null || :
+    fi
+    case "$_board_known:$_board" in
+        :*)                    NIGHTFALL_ROTATE=270
+                               stage "rotation 270 (default: board name unreadable, assuming the Slate)" ;;
+        1:Nocturne*|1:nocturne*) NIGHTFALL_ROTATE=270
+                               stage "rotation 270 (default: board is a Nocturne)" ;;
+        *)                     NIGHTFALL_ROTATE=0
+                               stage "rotation 0 (default: board is '${_board}', not a Nocturne)" ;;
+    esac
+fi
 export NIGHTFALL_ROTATE
 
 # stderr goes to a file rather than the console: it carries picker's own

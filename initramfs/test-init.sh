@@ -338,6 +338,7 @@ EOF
       -e "s|/dev/dri|$SB/dev/dri|g" -e "s|/dev/input|$SB/dev/input|g" \
       -e "s|/sys/class/drm|$SB/sys/class/drm|g" \
       -e "s|/etc/nightfall-build-id|$SB/etc/nightfall-build-id|g" \
+      -e "s|/sys/class/dmi|$SB/sys/class/dmi|g" \
       "$REPO/initramfs/init" > "$SB/init.body"
   { head -n1 "$SB/init.body"; printf '%s' "$shadow"; tail -n +2 "$SB/init.body"; } > "$SB/init"
 }
@@ -895,6 +896,30 @@ setup env envdump 0 0
 printf '2000' > "$SB/mnt/root/boot/nightfall-splash-ms"
 run
 nfe | grep -q "ENV_SPLASH_MS=2000" && ok "a newline-less nightfall-splash-ms is still honoured" || bad "lost: $(nfe | grep ENV_)"
+
+echo "=== 23. the default rotation follows the board, not a flat 270 ==="
+# 270 is right for exactly one machine (the Slate's panel is mounted rotated)
+# and sideways on every other. Positive identification only: a board that SAYS
+# it is not a Nocturne gets 0; a board name that cannot be read at all keeps
+# the historical 270, so nothing that worked on the Slate can start coming up
+# sideways because a sysfs file went missing.
+dmi() { mkdir -p "$SB/sys/class/dmi/id"; printf "$1" > "$SB/sys/class/dmi/id/board_name"; }
+setup env envdump 0 0; dmi 'Nocturne\n'; run
+nfe | grep -q "ENV_ROTATE=270 " && ok "a Nocturne board gets 270" || bad "Nocturne: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'Nocturne'; run
+nfe | grep -q "ENV_ROTATE=270 " && ok "a newline-less board name is still recognised (the read() gotcha)" || bad "no-newline: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'PRIME Z390-A\n'; run
+nfe | grep -q "ENV_ROTATE=0 " && ok "a desktop board gets 0 - not sideways" || bad "desktop board: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi '\n'; run
+nfe | grep -q "ENV_ROTATE=0 " && ok "an empty-but-readable board name (some VMs) counts as not-a-Nocturne" || bad "empty board: $(nfe | grep ENV_)"
+setup env envdump 0 0; run
+nfe | grep -q "ENV_ROTATE=270 " && ok "an UNREADABLE board name keeps the historical 270 - fail-safe for the Slate" || bad "unreadable: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'PRIME Z390-A\n'; echo 90 > "$SB/mnt/root/boot/nightfall-rotate"; run
+nfe | grep -q "ENV_ROTATE=90 " && ok "an explicit nightfall-rotate file still beats the board default" || bad "file overridden: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'PRIME Z390-A\n'; NIGHTFALL_ROTATE=180 run
+nfe | grep -q "ENV_ROTATE=180 " && ok "and so does NIGHTFALL_ROTATE from the kernel command line" || bad "cmdline overridden: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'PRIME Z390-A\n'; run
+log | grep -q "rotation 0 (default: board is 'PRIME Z390-A'" && ok "and the boot log says which board decided it" || bad "no trace in the log: $(log | grep -i rotation)"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"
