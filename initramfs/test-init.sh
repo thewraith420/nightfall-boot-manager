@@ -846,6 +846,56 @@ run
   && bad "called find-real-root.sh despite REAL_ROOT_DEV already being set" \
   || ok "self-discovery is skipped when REAL_ROOT_DEV is already pinned"
 
+echo "=== 22. a settings file with NO trailing newline is still read correctly ==="
+# The real bug, found on real hardware: every read here (build-id and the
+# five settings below) used to be `read -r VAR < FILE || VAR=""`. `read`
+# on a file with no trailing newline returns 1 AT EOF even though it
+# assigns the value correctly - build-initramfs.sh writes the build-id
+# with a bare printf, no newline - and the old `|| VAR=""` treated that
+# nonzero status as "nothing was read" and wiped the value straight back
+# out. Every test above used `echo`, which adds a newline for free, so
+# none of them could ever have caught this - it looked identical to
+# "works fine" right up until an actual initramfs, built the actual way,
+# ran on actual hardware. printf here, deliberately, not echo.
+setup happy ok 0 0
+mkdir -p "$SB/etc"; printf 'BUILD-XYZ' > "$SB/etc/nightfall-build-id"
+: > "$SB/dev/discovered-root"
+cat > "$SB/bin/find-real-root.sh" <<EOF
+#!/bin/sh
+echo "$SB/dev/discovered-root"
+exit 0
+EOF
+chmod +x "$SB/bin/find-real-root.sh"
+run_selfdiscover
+log | grep -qF "mounting real root ($SB/dev/discovered-root)" \
+  && ok "a newline-less build-id is still read and matched correctly" \
+  || bad "newline-less build-id was not honoured: $(log | grep 'mounting real root')"
+
+setup env envdump 0 0
+printf '45' > "$SB/mnt/root/boot/nightfall-timeout"
+run
+nfe | grep -q "ENV_TIMEOUT=45" && ok "a newline-less nightfall-timeout is still honoured" || bad "lost: $(nfe | grep ENV_)"
+
+setup env envdump 0 0
+printf '90' > "$SB/mnt/root/boot/nightfall-rotate"
+run
+nfe | grep -q "ENV_ROTATE=90 " && ok "a newline-less nightfall-rotate is still honoured" || bad "lost: $(nfe | grep ENV_)"
+
+setup env envdump 0 0
+printf 'on' > "$SB/mnt/root/boot/nightfall-autorotate"
+run
+nfe | grep -q "ENV_AUTO=1" && ok "a newline-less nightfall-autorotate is still honoured" || bad "lost: $(nfe | grep ENV_)"
+
+setup env envdump 0 0
+printf 'off' > "$SB/mnt/root/boot/nightfall-splash"
+run
+nfe | grep -q "ENV_SPLASH=0 " && ok "a newline-less nightfall-splash is still honoured" || bad "lost: $(nfe | grep ENV_)"
+
+setup env envdump 0 0
+printf '2000' > "$SB/mnt/root/boot/nightfall-splash-ms"
+run
+nfe | grep -q "ENV_SPLASH_MS=2000" && ok "a newline-less nightfall-splash-ms is still honoured" || bad "lost: $(nfe | grep ENV_)"
+
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"
 [ "$fail" -eq 0 ] || exit 1

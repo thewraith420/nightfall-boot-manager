@@ -276,7 +276,17 @@ rescue() {
 if [ -z "${REAL_ROOT_DEV:-}" ]; then
     my_build_id=""
     if [ -r /etc/nightfall-build-id ]; then
-        read -r my_build_id < /etc/nightfall-build-id 2>/dev/null || my_build_id=""
+        # `|| :`, NOT `|| my_build_id=""` - build-initramfs.sh writes this
+        # file with a bare printf, no trailing newline, and `read` on a
+        # newline-less file returns 1 AT EOF even though it assigned the
+        # value correctly. The old `|| my_build_id=""` treated that
+        # nonzero status as "nothing was read" and wiped the id right
+        # back out - which is exactly what made every roaming build look
+        # id-less and silently fall back to the Slate's internal eMMC,
+        # the one thing this whole feature exists to stop. Found on real
+        # hardware, not anticipated: the file already exists and is
+        # readable by the time this runs, so nothing else can fail here.
+        read -r my_build_id < /etc/nightfall-build-id 2>/dev/null || :
     fi
     if [ -n "$my_build_id" ]; then
         stage "looking for the disk this install actually lives on"
@@ -378,7 +388,10 @@ if [ -f "$TIMEOUT_FILE" ]; then
     # looked fine. read is a shell builtin, always there, and strips
     # surrounding whitespace via IFS for free.
     _t=""
-    read -r _t < "$TIMEOUT_FILE" 2>/dev/null || _t=""
+    # `|| :`, not `|| _t=""` - see the build-id read above: a
+    # newline-less file makes read return 1 at EOF despite
+    # assigning the value correctly, and the old pattern wiped it.
+    read -r _t < "$TIMEOUT_FILE" 2>/dev/null || :
     case "$_t" in
         ''|*[!0-9]*)
             warn "ignoring $TIMEOUT_FILE: not a plain number" ;;
@@ -449,7 +462,10 @@ ROTATE_FILE=/mnt/root/boot/nightfall-rotate
 AUTOROTATE_FILE=/mnt/root/boot/nightfall-autorotate
 if [ -f "$ROTATE_FILE" ]; then
     _r=""
-    read -r _r < "$ROTATE_FILE" 2>/dev/null || _r=""
+    # `|| :`, not `|| _r=""` - see the build-id read above: a
+    # newline-less file makes read return 1 at EOF despite
+    # assigning the value correctly, and the old pattern wiped it.
+    read -r _r < "$ROTATE_FILE" 2>/dev/null || :
     case "$_r" in
         0|90|180|270) NIGHTFALL_ROTATE=$_r
                       stage "starting rotation ${_r} (from nightfall-rotate)" ;;
@@ -458,7 +474,10 @@ if [ -f "$ROTATE_FILE" ]; then
 fi
 if [ -f "$AUTOROTATE_FILE" ]; then
     _a=""
-    read -r _a < "$AUTOROTATE_FILE" 2>/dev/null || _a=""
+    # `|| :`, not `|| _a=""` - see the build-id read above: a
+    # newline-less file makes read return 1 at EOF despite
+    # assigning the value correctly, and the old pattern wiped it.
+    read -r _a < "$AUTOROTATE_FILE" 2>/dev/null || :
     case "$_a" in
         # Normalised to 0/1 on the way out, so Nightfall only ever sees
         # the two values its own parser is known to handle.
@@ -480,7 +499,10 @@ SPLASH_FILE=/mnt/root/boot/nightfall-splash
 SPLASH_MS_FILE=/mnt/root/boot/nightfall-splash-ms
 if [ -f "$SPLASH_FILE" ]; then
     _s=""
-    read -r _s < "$SPLASH_FILE" 2>/dev/null || _s=""
+    # `|| :`, not `|| _s=""` - see the build-id read above: a
+    # newline-less file makes read return 1 at EOF despite
+    # assigning the value correctly, and the old pattern wiped it.
+    read -r _s < "$SPLASH_FILE" 2>/dev/null || :
     case "$_s" in
         1|on)  NIGHTFALL_SPLASH=1; export NIGHTFALL_SPLASH
                stage "boot screens on (from nightfall-splash)" ;;
@@ -491,7 +513,10 @@ if [ -f "$SPLASH_FILE" ]; then
 fi
 if [ -f "$SPLASH_MS_FILE" ]; then
     _m=""
-    read -r _m < "$SPLASH_MS_FILE" 2>/dev/null || _m=""
+    # `|| :`, not `|| _m=""` - see the build-id read above: a
+    # newline-less file makes read return 1 at EOF despite
+    # assigning the value correctly, and the old pattern wiped it.
+    read -r _m < "$SPLASH_MS_FILE" 2>/dev/null || :
     case "$_m" in
         ''|*[!0-9]*)
             warn "ignoring $SPLASH_MS_FILE: not a plain number of milliseconds" ;;

@@ -187,8 +187,16 @@ if [ -z "$build_id" ]; then
     echo "build-initramfs: WARNING: /proc/sys/kernel/random/uuid unavailable," >&2
     echo "  using a weaker fallback build id ($build_id)." >&2
 fi
-printf '%s' "$build_id" > "$staging/etc/nightfall-build-id"
-printf '%s' "$build_id" > "$out.build-id"
+# WITH a trailing newline (%s\n, not %s): init reads this file with the
+# shell's own `read`, and `read` on a file with no trailing newline
+# returns 1 at EOF even though it assigns the value correctly - which,
+# discovered on real hardware, silently turned every build's id back
+# into "" the moment init's own `|| ...=""` treated that nonzero status
+# as "nothing was there". install-nightfall.sh's copy of this file
+# inherits whatever newline convention it's given, so getting it right
+# starts here.
+printf '%s\n' "$build_id" > "$staging/etc/nightfall-build-id"
+printf '%s\n' "$build_id" > "$out.build-id"
 say "build id: $build_id"
 
 # ---------------------------------------------------------------------- pack
