@@ -68,8 +68,8 @@ out=$(run BUILD-ABC); rc=$?
 [ "$rc" = 0 ] && ok "exits 0" || bad "exit $rc"
 [ "$out" = "/dev/sda2" ] && ok "reports the matching partition" || bad "wrong device: $out"
 grep -qE '^MOUNT -t ext4 -o ro,noload ' "$SB/log" \
-  && ok "tries ext4 with noload first, not a bare -o ro (a dirty journal would still get replayed - a write - under plain ro)" \
-  || bad "did not try ext4,noload: $(grep MOUNT "$SB/log")"
+  && ok "mounts as ext4 with noload, never a bare -o ro (a dirty journal would still get replayed - a write - under plain ro)" \
+  || bad "did not mount with -t ext4 -o ro,noload: $(grep MOUNT "$SB/log")"
 teardown
 
 echo "=== a different build-id on the disk does not count as a match ==="
@@ -98,6 +98,31 @@ add_disk sdc sdc1
 write_mount_mock
 out=$(run BUILD-ABC); rc=$?
 [ "$rc" != 0 ] && [ -z "$out" ] && ok "an unmountable partition does not stop the search" || bad "unexpected: rc=$rc out=$out"
+teardown
+
+echo "=== an ext4 partition that rejects noload is skipped, NEVER retried unprotected ==="
+# Models a real ext4 partition that, for whatever reason (an incompatible
+# feature flag, say), refuses the noload mount specifically - content_with_id
+# would make a BARE mount succeed, proving this only fails because noload
+# was rejected, not because the partition is unreadable outright.
+setup
+add_disk sdd sdd1
+content_with_id sdd1 BUILD-ABC
+cat > "$SB/bin/mount" <<EOF
+#!/bin/sh
+echo "MOUNT \$*" >> "$SB/log"
+case "\$*" in *noload*) exit 1 ;; esac
+for a in "\$@"; do dst=\$a; done
+mkdir -p "\$dst"
+cp -a "$SB/content-sdd1"/. "\$dst"/ 2>/dev/null || true
+exit 0
+EOF
+chmod +x "$SB/bin/mount"
+out=$(run BUILD-ABC); rc=$?
+[ "$rc" != 0 ] && [ -z "$out" ] && ok "the partition is skipped rather than matched" || bad "should not have matched: rc=$rc out=$out"
+grep -qE '^MOUNT -o ro /' "$SB/log" \
+  && bad "retried with a bare, unprotected mount after noload was rejected" \
+  || ok "never falls back to an unprotected mount for a partition noload rejected"
 teardown
 
 echo "=== the real install can be on ANY disk, not just the first one walked ==="

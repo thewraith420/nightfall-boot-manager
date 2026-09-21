@@ -48,18 +48,22 @@ for disk in "$sysblock"/*; do
         [ "$p" = "$d" ] && continue
         [ -e "$devdir/$p" ] || continue
 
-        # ext4 first, and with noload: a plain "ro" mount of a DIRTY ext4
+        # ext4 only, and with noload: a plain "ro" mount of a DIRTY ext4
         # filesystem still replays its journal - a write - despite being
         # asked for read-only, unless noload says not to. Every machine
         # this has run on keeps root as ext4, and this script's whole job
         # is walking partitions on whatever machine a roaming drive is
         # plugged into next, some of which will not have been shut down
-        # cleanly. If it is not ext4 (a vfat ESP, a swap partition, or
-        # nothing this kernel has a driver for at all), fall back to
-        # letting the kernel pick - it just fails to mount and is skipped,
-        # the same as everywhere else here.
-        mount -t ext4 -o ro,noload "$devdir/$p" "$probe_dir" 2>/dev/null || \
-            mount -o ro "$devdir/$p" "$probe_dir" 2>/dev/null || continue
+        # cleanly.
+        #
+        # Deliberately NOT falling back to a plain, type-agnostic mount
+        # when this fails: a vfat ESP or a swap partition was never going
+        # to have /boot/nightfall/build-id on it anyway, and an ext4
+        # partition that fails even the noload attempt (an incompatible
+        # feature flag, say) must not be retried unprotected just because
+        # the safer attempt didn't work - skipping it is the conservative
+        # failure here, not a plain mount that might still write.
+        mount -t ext4 -o ro,noload "$devdir/$p" "$probe_dir" 2>/dev/null || continue
         match=""
         if [ -f "$probe_dir/boot/nightfall/build-id" ]; then
             id=$(cat "$probe_dir/boot/nightfall/build-id" 2>/dev/null || echo "")
