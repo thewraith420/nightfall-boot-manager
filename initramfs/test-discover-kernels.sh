@@ -90,11 +90,13 @@ sh "$SCRIPT" "$SB/near.cfg" | grep -q "7.2-nightfall-test" \
   || bad "over-excluded a real kernel because of its name"
 
 echo "=== 3b. unresolved GRUB variables never reach a kexec command line ==="
-# Defensive: stock Ubuntu 10_linux can put a $vt_handoff reference on linux
-# lines. GRUB expands it at its own boot time; this parser cannot, and
-# kexec-boot.sh passes the cmdline verbatim. NOT observed on any real config
-# checked so far (the recovery stick grub.cfg has it only in set-statements),
-# so these are synthetic fixtures, deliberately.
+# Ubuntu 10_linux appends a vt_handoff reference whenever the default cmdline
+# has the word splash, so an Ubuntu-style regeneration puts it on every linux
+# line; GRUB expands it at its own boot time, this parser cannot, and
+# kexec-boot.sh passes the cmdline verbatim. Seen for real on the recovery
+# stick after an update-grub (the Slate own grub.cfg never had one). These are
+# synthetic fixtures because the real file was later rewritten without it and
+# was not preserved.
 cat > "$SB/vt.cfg" <<'EOF'
 menuentry 'Ubuntu, with Linux 7.2.6' --class ubuntu {
 	linux	/boot/vmlinuz-7.2.6 root=UUID=abc ro quiet splash $vt_handoff

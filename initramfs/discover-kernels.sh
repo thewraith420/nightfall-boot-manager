@@ -52,14 +52,17 @@ frame_type[depth] == "menuentry" && ($1 == "linux" || $1 == "linuxefi" || $1 == 
     # A whole-token GRUB variable reference (vt_handoff, foo in braces) is
     # dropped, not passed on: GRUB expands these at its own boot time, this
     # parser cannot, and kexec-boot.sh hands the cmdline over verbatim, so a
-    # kexec-booted kernel would receive the literal text. DEFENSIVE, not a
-    # fix for anything observed: stock Ubuntu 10_linux can put a vt_handoff
-    # reference on linux lines, but it was checked against the recovery
-    # stick real grub.cfg and there it appears only in the set-statements,
-    # never on a linux line - so no real config has exercised this yet.
-    # (vt.handoff=7 itself means nothing after a kexec - it hands GRUB
-    # display state to the kernel, and GRUB is long gone. NO apostrophes in
-    # this comment: it lives inside the shell single-quoted awk program.)
+    # kexec-booted kernel would receive the literal text. Real, not
+    # hypothetical: Ubuntu 10_linux appends a vt_handoff reference to a
+    # kernel command line whenever the default cmdline contains the word
+    # splash, so an Ubuntu-style regeneration of a grub.cfg (Mint drop-in
+    # sets GRUB_DISTRIBUTOR=Ubuntu) puts it on every linux line - seen on the
+    # recovery stick after an update-grub, and parsed through verbatim by the
+    # old code. Whether a given grub.cfg has it depends on how it was last
+    # generated: a later rewrite of the same file left it out. (vt.handoff=7
+    # itself means nothing after a kexec - it hands GRUB display state to the
+    # kernel, and GRUB is long gone. NO apostrophes in this comment: it lives
+    # inside the shell single-quoted awk program.)
     c = ""
     for (i = 3; i <= NF; i++) {
         if ($i ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/) continue
