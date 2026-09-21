@@ -90,11 +90,11 @@ sh "$SCRIPT" "$SB/near.cfg" | grep -q "7.2-nightfall-test" \
   || bad "over-excluded a real kernel because of its name"
 
 echo "=== 3b. unresolved GRUB variables never reach a kexec command line ==="
-# Ubuntu/Mint 10_linux puts $vt_handoff on every linux line. GRUB expands it
-# at its own boot time; this parser cannot, and kexec-boot.sh passes the
-# cmdline verbatim - so the literal text would land on the new kernel's
-# command line. The Slate's own grub.cfg never had one, which is why the
-# real-fixture assertions above could not see it.
+# Defensive: stock Ubuntu 10_linux can put a $vt_handoff reference on linux
+# lines. GRUB expands it at its own boot time; this parser cannot, and
+# kexec-boot.sh passes the cmdline verbatim. NOT observed on any real config
+# checked so far (the recovery stick grub.cfg has it only in set-statements),
+# so these are synthetic fixtures, deliberately.
 cat > "$SB/vt.cfg" <<'EOF'
 menuentry 'Ubuntu, with Linux 7.2.6' --class ubuntu {
 	linux	/boot/vmlinuz-7.2.6 root=UUID=abc ro quiet splash $vt_handoff
