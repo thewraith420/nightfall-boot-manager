@@ -216,6 +216,40 @@ rc=$(RUN_CMDLINE="i915.enable_psr=0" run)
 [ "$rc" = 0 ] && ok "an explicit NIGHTFALL_CMDLINE overrides the check" || bad "refused an explicit override"
 entry_opts | grep -qx "i915.enable_psr=0 *" && ok "and uses exactly what it was given" || bad "override not used: $(entry_opts)"
 
+echo "=== build id: lets find-real-root.sh recognise this install later ==="
+# The same initramfs image can now be installed on more than one disk on
+# the same machine (a portable recovery/toolkit USB stick, alongside the
+# internal install) - this is the install-time half of the pairing;
+# build-initramfs.sh writes the initramfs-side half.
+setup 0 yes
+rm -rf "$SB/boot/picker" "$SB/boot/picker-default" "$SB/boot/picker-cmdline"
+echo "SOME-BUILD-UUID" > "$SB/initramfs.img.build-id"
+rc=$(run)
+[ "$rc" = 0 ] && ok "installs normally with a sibling build-id file present" || bad "failed: $(tail -3 "$SB/out")"
+[ "$(cat "$SB/boot/nightfall/build-id" 2>/dev/null)" = "SOME-BUILD-UUID" ] \
+  && ok "copies the exact build id onto the real root" || bad "build id missing or wrong: $(cat "$SB/boot/nightfall/build-id" 2>/dev/null)"
+
+echo "=== no sibling build-id file (an older build-initramfs.sh) is not a failure ==="
+setup 0 yes
+rm -rf "$SB/boot/picker" "$SB/boot/picker-default" "$SB/boot/picker-cmdline"
+rc=$(run)
+[ "$rc" = 0 ] && ok "installs fine anyway - this must never block an install" || bad "refused to install: $(tail -3 "$SB/out")"
+[ ! -e "$SB/boot/nightfall/build-id" ] && ok "no build-id file is written when there is nothing to copy" || bad "wrote a build-id out of nowhere"
+grep -qi "no .*build-id" "$SB/out" && ok "says so, so a silent version mismatch is not a mystery later" || bad "silent about the missing sibling file"
+
+echo "=== reinstalling without a build-id does not leave a STALE one behind ==="
+# The dangerous case: an old install had a build-id (from an earlier,
+# newer build-initramfs.sh), and this reinstall's own initramfs somehow
+# has none - leaving the old file would make find-real-root.sh match this
+# partition against a build id that no longer describes what's on it.
+setup 0 yes
+rm -rf "$SB/boot/picker" "$SB/boot/picker-default" "$SB/boot/picker-cmdline"
+mkdir -p "$SB/boot/nightfall"
+echo "STALE-OLD-UUID" > "$SB/boot/nightfall/build-id"
+rc=$(run)
+[ "$rc" = 0 ] && ok "installs" || bad "failed: $(tail -3 "$SB/out")"
+[ ! -e "$SB/boot/nightfall/build-id" ] && ok "the stale build-id from the previous install is removed" || bad "left a stale build-id behind: $(cat "$SB/boot/nightfall/build-id")"
+
 echo
 echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

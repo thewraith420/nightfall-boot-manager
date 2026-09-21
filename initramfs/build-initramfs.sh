@@ -80,6 +80,7 @@ for f in "$here/init" "$here/discover-kernels.sh" "$here/apply-default.sh" \
          "$here/discover-backups.sh" "$here/scan-drives.sh" \
          "$here/discover-live-isos.sh" "$here/boot-live-iso.sh" \
          "$here/discover-bootable-drives.sh" "$here/boot-external-drive.sh" \
+         "$here/find-real-root.sh" \
          "$repo/boot-integration/kexec-boot.sh"; do
     [ -r "$f" ] || die "missing source file: $f"
 done
@@ -129,6 +130,9 @@ install -m 0755 "$here/discover-backups.sh"         "$staging/bin/discover-backu
 install -m 0755 "$here/scan-drives.sh"              "$staging/bin/scan-drives.sh"
 install -m 0755 "$here/discover-live-isos.sh"       "$staging/bin/discover-live-isos.sh"
 install -m 0755 "$here/boot-live-iso.sh"            "$staging/bin/boot-live-iso.sh"
+install -m 0755 "$here/discover-bootable-drives.sh" "$staging/bin/discover-bootable-drives.sh"
+install -m 0755 "$here/boot-external-drive.sh"      "$staging/bin/boot-external-drive.sh"
+install -m 0755 "$here/find-real-root.sh"           "$staging/bin/find-real-root.sh"
 install -m 0755 "$repo/boot-integration/kexec-boot.sh" "$staging/sbin/kexec-boot.sh"
 
 # ------------------------------------------------------------ shared libraries
@@ -160,6 +164,32 @@ for b in "$staging/bin/busybox" "$staging/sbin/kexec" "$staging/bin/nightfall" \
     echo "  $(basename "$b"):"
     copy_libs_for "$b"
 done
+
+# ------------------------------------------------------------------ build id
+
+# Stamped into the image so find-real-root.sh can recognise, at boot time,
+# which physical partition this exact build actually lives on - needed
+# now that the same image can be installed on more than one disk on the
+# same machine (Bob's portable recovery/toolkit USB stick, alongside the
+# Slate's own internal install). install-nightfall.sh reads the sibling
+# file this writes next to $out and copies it onto whatever real root it
+# installs to; see find-real-root.sh's own header for the full mechanism.
+#
+# /proc/sys/kernel/random/uuid needs nothing this build machine wouldn't
+# already have (a normal /proc, no extra package) - falls back to
+# something merely "probably unique" only if that is somehow unreadable,
+# since a build id that collided across two different builds would be a
+# much worse failure (find-real-root.sh confidently returning the WRONG
+# partition) than this script simply refusing to produce one.
+build_id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)
+if [ -z "$build_id" ]; then
+    build_id="fallback-$(date +%s%N 2>/dev/null || echo 0)-$$-$(hostname 2>/dev/null || echo unknown)"
+    echo "build-initramfs: WARNING: /proc/sys/kernel/random/uuid unavailable," >&2
+    echo "  using a weaker fallback build id ($build_id)." >&2
+fi
+printf '%s' "$build_id" > "$staging/etc/nightfall-build-id"
+printf '%s' "$build_id" > "$out.build-id"
+say "build id: $build_id"
 
 # ---------------------------------------------------------------------- pack
 

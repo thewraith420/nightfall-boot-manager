@@ -282,6 +282,15 @@ EOF
   # Fails by default, same convention as boot-live-iso.sh's mock above -
   # the "arms BootNext and reboots" test overrides this to exit 0.
   printf '#!/bin/sh\necho "MARKER_BOOT_EXTERNAL part=$1 loader=$2" >&2\nexit 1\n' > "$SB/bin/boot-external-drive.sh"
+  # Fails (finds nothing) by default, same convention - the self-discovery
+  # tests override this per scenario. Counts its calls in $SB/fr-calls so
+  # a test can tell how many attempts the retry loop actually made.
+  cat > "$SB/bin/find-real-root.sh" <<'EOF'
+#!/bin/sh
+n=$(cat "$SB/fr-calls" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$SB/fr-calls"
+echo "MARKER_FIND_REAL_ROOT_CALLED $n id=$1" >&2
+exit 1
+EOF
   chmod +x "$SB"/bin/* "$SB"/sbin/*
 
   # Applet dir for BUSYBOX mode. Placed AFTER $SB/bin in PATH so the
@@ -328,6 +337,7 @@ EOF
       -e "s|/mnt/root|$SB/mnt/root|g" -e "s|/run/nightfall|$SB/run/nightfall|g" \
       -e "s|/dev/dri|$SB/dev/dri|g" -e "s|/dev/input|$SB/dev/input|g" \
       -e "s|/sys/class/drm|$SB/sys/class/drm|g" \
+      -e "s|/etc/nightfall-build-id|$SB/etc/nightfall-build-id|g" \
       "$REPO/initramfs/init" > "$SB/init.body"
   { head -n1 "$SB/init.body"; printf '%s' "$shadow"; tail -n +2 "$SB/init.body"; } > "$SB/init"
 }
@@ -349,6 +359,23 @@ run() {
 
   PATH="$_path" \
   REAL_ROOT_DEV="$SB/dev/rootdev" NIGHTFALL_FALLBACK_PAUSE=0 \
+  NIGHTFALL_WAIT_ROOT=${W:-3} NIGHTFALL_WAIT_DRM=${W:-3} NIGHTFALL_WAIT_INPUT=${W:-3} \
+  NIGHTFALL_INSTALL_PAUSE=0 NIGHTFALL_VERBOSE="${NIGHTFALL_VERBOSE:-}" \
+    ${TEST_SH:-/bin/sh} "$SB/init" >"$SB/out" 2>"$SB/err"
+}
+
+# Same as run(), but WITHOUT REAL_ROOT_DEV set - the only way to actually
+# exercise init's self-discovery, since run() itself always pins it (every
+# other test needs a known, fixed root device to assert against, which is
+# exactly the thing self-discovery exists to replace when nothing pinned
+# it first).
+run_selfdiscover() {
+  _path="$SB/bin:$SB/sbin"
+  if [ -n "${USE_BUSYBOX:-}" ]; then _path="$_path:$SB/bbin"; fi
+  if [ -z "${STRICT_BB:-}" ];  then _path="$_path:$PATH"; fi
+
+  PATH="$_path" \
+  NIGHTFALL_FALLBACK_PAUSE=0 \
   NIGHTFALL_WAIT_ROOT=${W:-3} NIGHTFALL_WAIT_DRM=${W:-3} NIGHTFALL_WAIT_INPUT=${W:-3} \
   NIGHTFALL_INSTALL_PAUSE=0 NIGHTFALL_VERBOSE="${NIGHTFALL_VERBOSE:-}" \
     ${TEST_SH:-/bin/sh} "$SB/init" >"$SB/out" 2>"$SB/err"
@@ -726,6 +753,85 @@ run
 sb2=$(both | grep -c "MARKER_BOOT_EXTERNAL")
 [ "$sb2" = 1 ] && ok "boot-external-drive.sh is called exactly once, not again for the real-kernel round" \
   || bad "called $sb2 times - a stale BOOT_EXTERNAL_PART leaked into the next round"
+
+echo "=== 21. self-discovering which disk this install actually lives on ==="
+# run_selfdiscover(), unlike run(), does NOT pin REAL_ROOT_DEV - the only
+# way to actually exercise this, since every other test needs a known,
+# fixed root device to assert against.
+#
+# Two things to remember reading these:
+#   - init calls find-real-root.sh with its OWN stderr sent to /dev/null
+#     (a failed search is not noise worth showing), so a mock cannot prove
+#     it was called via a stderr marker the way other mocks in this file
+#     do - it has to write proof to a FILE instead, same as the DEFAULT
+#     find-real-root.sh mock's own $SB/fr-calls counter already does.
+#   - stage() (unlike warn()) only echoes when NIGHTFALL_VERBOSE is set,
+#     so "mounting real root (...)" never reaches both() here - it always
+#     reaches the saved boot log's stage trail (log()) regardless, since
+#     stage() records into $stages unconditionally.
+setup happy ok 0 0
+mkdir -p "$SB/etc"; echo "BUILD-XYZ" > "$SB/etc/nightfall-build-id"
+: > "$SB/dev/discovered-root"
+cat > "$SB/bin/find-real-root.sh" <<EOF
+#!/bin/sh
+echo "\$1" > "$SB/fr-id-seen"
+echo "$SB/dev/discovered-root"
+exit 0
+EOF
+chmod +x "$SB/bin/find-real-root.sh"
+run_selfdiscover
+[ "$(cat "$SB/fr-id-seen" 2>/dev/null)" = "BUILD-XYZ" ] \
+  && ok "runs find-real-root.sh with this build's own stamped id" || bad "not called correctly: $(cat "$SB/fr-id-seen" 2>/dev/null)"
+log | grep -qF "mounting real root ($SB/dev/discovered-root)" \
+  && ok "mounts the self-discovered partition, not the hardcoded default" || bad "wrong root: $(log | grep 'mounting real root')"
+both | grep -q "MARKER_KEXEC.*vmlinuz-chosen" && ok "boots normally afterwards" || bad "never reached a boot"
+
+echo "=== self-discovery retries if storage has not finished enumerating yet ==="
+setup happy ok 0 0
+mkdir -p "$SB/etc"; echo "BUILD-XYZ" > "$SB/etc/nightfall-build-id"
+: > "$SB/dev/discovered-root"
+cat > "$SB/bin/find-real-root.sh" <<EOF
+#!/bin/sh
+n=\$(cat "$SB/fr-calls" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n" > "$SB/fr-calls"
+if [ "\$n" -ge 3 ]; then
+  echo "$SB/dev/discovered-root"
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$SB/bin/find-real-root.sh"
+run_selfdiscover
+[ "$(cat "$SB/fr-calls" 2>/dev/null)" = 3 ] \
+  && ok "keeps retrying until it actually finds something (3rd attempt)" || bad "wrong attempt count: $(cat "$SB/fr-calls" 2>/dev/null)"
+log | grep -qF "mounting real root ($SB/dev/discovered-root)" \
+  && ok "mounts what the retry eventually found" || bad "wrong root: $(log | grep 'mounting real root')"
+
+echo "=== giving up falls back to the internal eMMC, with a warning - not silently ==="
+setup happy ok 0 0
+mkdir -p "$SB/etc"; echo "BUILD-XYZ" > "$SB/etc/nightfall-build-id"
+W=1 run_selfdiscover
+both | grep -q "could not find a disk matching this build" \
+  && ok "warns before falling back" || bad "no warning: $(both | grep -i 'could not find')"
+log | grep -qF "mounting real root (/dev/mmcblk0p2)" \
+  && ok "falls back to the historical hardcoded default" || bad "wrong fallback: $(log | grep 'mounting real root')"
+
+echo "=== no build-id in this image (an older build) falls back immediately ==="
+setup happy ok 0 0
+run_selfdiscover
+both | grep -q "nightfall-build-id in this image (built by an older build-initramfs.sh)" \
+  && ok "warns about the missing build id, with a different message than a failed search" || bad "no warning: $(both | grep -i 'build.id')"
+[ -e "$SB/fr-calls" ] \
+  && bad "called find-real-root.sh with nothing to search for" || ok "never calls find-real-root.sh when there is no id to match"
+log | grep -qF "mounting real root (/dev/mmcblk0p2)" \
+  && ok "falls back to the historical hardcoded default" || bad "wrong fallback: $(log | grep 'mounting real root')"
+
+echo "=== REAL_ROOT_DEV set some other way first (e.g. a kernel cmdline override) skips self-discovery entirely ==="
+setup happy ok 0 0
+mkdir -p "$SB/etc"; echo "BUILD-XYZ" > "$SB/etc/nightfall-build-id"
+run
+[ -e "$SB/fr-calls" ] \
+  && bad "called find-real-root.sh despite REAL_ROOT_DEV already being set" \
+  || ok "self-discovery is skipped when REAL_ROOT_DEV is already pinned"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"

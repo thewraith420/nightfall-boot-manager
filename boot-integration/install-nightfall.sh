@@ -219,6 +219,30 @@ cp "$kernel"    "$NIGHTFALL_DIR/vmlinuz"
 cp "$initramfs" "$NIGHTFALL_DIR/initramfs.img"
 chmod 0644 "$NIGHTFALL_DIR/vmlinuz" "$NIGHTFALL_DIR/initramfs.img"
 
+# The same initramfs image can now be installed on more than one disk on
+# the same machine (a portable recovery/toolkit USB stick, alongside this
+# machine's own internal install) - find-real-root.sh needs a way to tell,
+# at boot time, which one it actually came from. build-initramfs.sh writes
+# the id baked into $initramfs to a sibling "<initramfs>.build-id" file;
+# copying that same value here is what makes the two sides match.
+#
+# Best-effort and silent-if-missing rather than a hard requirement: an
+# initramfs built by an older build-initramfs.sh simply has no sibling
+# file, and init already falls back to the historical hardcoded default
+# with its own warning when there is nothing to match - a missing id here
+# must never be a reason this script refuses to install.
+build_id_src="$initramfs.build-id"
+if [ -r "$build_id_src" ]; then
+    cp "$build_id_src" "$NIGHTFALL_DIR/build-id"
+    chmod 0644 "$NIGHTFALL_DIR/build-id"
+    say "stamped build id: $(cat "$NIGHTFALL_DIR/build-id")"
+else
+    rm -f "$NIGHTFALL_DIR/build-id"
+    echo "install-nightfall: note: no $build_id_src found (built by an older" >&2
+    echo "  build-initramfs.sh) - this install will fall back to the internal" >&2
+    echo "  eMMC if more than one Nightfall install ever exists on this machine." >&2
+fi
+
 # Resolve the GRUB device spec for whatever /boot lives on, so the
 # entry works whether or not /boot is its own partition.
 boot_uuid=$(findmnt -no UUID --target /boot 2>/dev/null || true)

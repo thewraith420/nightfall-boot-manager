@@ -253,27 +253,67 @@ rescue() {
     exec /bin/sh
 }
 
-# Root and /boot are the same partition on the Slate: /dev/mmcblk0p2
-# (ext4, eMMC via sdhci_pci/cqhci - no NVMe/SATA/UFS). No LABEL is set,
-# and busybox mdev doesn't populate /dev/disk/by-uuid without a custom
-# blkid-driven rule, so this is a raw device path rather than
-# by-label/by-uuid - fine here since eMMC partition numbering is stable
-# (fixed internal storage, nothing to hot-plug ahead of it). Confirmed
-# on real hardware; UUID=076aa633-aff9-4f0f-98a7-f939eb74e7ff or
-# PARTUUID=e16d3cff-5493-4c48-b2ef-88ffc913e7a4 if by-uuid symlinks ever
-# get added instead. /boot/efi is a separate vfat ESP but only holds
-# GRUB's own EFI binary - grub.cfg lives on this ext4 partition, so the
-# ESP is never mounted here.
+# This SAME initramfs image can now be booted from more than one disk on
+# the same machine - Bob's portable recovery/toolkit USB stick carries its
+# own Nightfall install, right alongside the Slate's internal one - so the
+# historical assumption "REAL_ROOT_DEV is always the internal eMMC" no
+# longer holds. By the time this runs, GRUB has already handed off with no
+# memory of which physical partition it actually loaded this from, so
+# find-real-root.sh self-discovers it: walk every candidate partition,
+# mount each read-only, and look for the SAME build id this initramfs was
+# stamped with at build time (/etc/nightfall-build-id) - see that script's
+# own header. REAL_ROOT_DEV set some other way first (a kernel cmdline
+# override, for manual debugging via GRUB's 'e' editor) is left alone.
+#
+# Root and /boot are the same partition on every machine this has run on
+# (the Slate's internal eMMC, and Bob's stick) - no separate /boot mount -
+# which is what makes "the partition with a matching /boot/nightfall"
+# and "the real root" the same question for now. No LABEL is set on the
+# Slate's eMMC, and busybox mdev doesn't populate /dev/disk/by-uuid
+# without a custom blkid-driven rule, so this self-discovery walks raw
+# device paths rather than by-label/by-uuid - the same reason the old
+# hardcoded default was a raw path too.
+if [ -z "${REAL_ROOT_DEV:-}" ]; then
+    my_build_id=""
+    if [ -r /etc/nightfall-build-id ]; then
+        read -r my_build_id < /etc/nightfall-build-id 2>/dev/null || my_build_id=""
+    fi
+    if [ -n "$my_build_id" ]; then
+        stage "looking for the disk this install actually lives on"
+        # Bounded the same as the old single-device wait below (storage
+        # enumeration is not instant) - this loop runs INSTEAD of that
+        # wait when discovery succeeds, since find-real-root.sh already
+        # had to mount the device to confirm the match.
+        _n=0
+        found=""
+        while :; do
+            found=$(/bin/find-real-root.sh "$my_build_id" 2>/dev/null) || found=""
+            [ -n "$found" ] && break
+            _n=$((_n + 1))
+            [ "$_n" -gt "${NIGHTFALL_WAIT_ROOT:-15}" ] && break
+            sleep 1
+        done
+        if [ -n "$found" ]; then
+            REAL_ROOT_DEV=$found
+            stage "found it: $REAL_ROOT_DEV"
+        else
+            warn "could not find a disk matching this build after ${NIGHTFALL_WAIT_ROOT:-15}s - falling back to the internal eMMC"
+        fi
+    else
+        warn "no /etc/nightfall-build-id in this image (built by an older build-initramfs.sh) - falling back to the internal eMMC"
+    fi
+fi
 # EXPORTED, not just set. Nightfall reads it with getenv() to hand the
 # real root device to scan-drives.sh and to the repair actions - and
 # without the export it silently got NULL and fell back to a hardcoded
-# /dev/mmcblk0p2. That happens to be correct on this machine, which is
-# exactly why it went unnoticed; a filesystem checker must not run on a
-# device chosen by a lucky default.
+# /dev/mmcblk0p2. That happened to be correct on the Slate, which is
+# exactly why it went unnoticed for as long as it did; a filesystem
+# checker must not run on a device chosen by a lucky default.
 : "${REAL_ROOT_DEV:=/dev/mmcblk0p2}"
 export REAL_ROOT_DEV
 # eMMC probe is not instant, and a root mount that fails here drops
-# straight to the rescue shell - the harshest outcome in the script.
+# straight to the rescue shell - the harshest outcome in the script. A
+# no-op the moment self-discovery above already found and mounted it.
 wait_for "root device" "$REAL_ROOT_DEV" "${NIGHTFALL_WAIT_ROOT:-15}"
 stage "mounting real root ($REAL_ROOT_DEV)"
 if ! mount -o ro "$REAL_ROOT_DEV" /mnt/root; then
