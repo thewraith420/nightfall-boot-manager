@@ -40,6 +40,7 @@ plain_content() {
 write_mount_mock() {
   cat > "$SB/bin/mount" <<EOF
 #!/bin/sh
+echo "MOUNT \$*" >> "$SB/log"
 for a in "\$@"; do dst=\$a; done
 src=\$(echo "\$*" | grep -oE '/dev/[a-z0-9]+' | tail -1)
 part=\${src##*/}
@@ -66,6 +67,9 @@ write_mount_mock
 out=$(run BUILD-ABC); rc=$?
 [ "$rc" = 0 ] && ok "exits 0" || bad "exit $rc"
 [ "$out" = "/dev/sda2" ] && ok "reports the matching partition" || bad "wrong device: $out"
+grep -qE '^MOUNT -t ext4 -o ro,noload ' "$SB/log" \
+  && ok "tries ext4 with noload first, not a bare -o ro (a dirty journal would still get replayed - a write - under plain ro)" \
+  || bad "did not try ext4,noload: $(grep MOUNT "$SB/log")"
 teardown
 
 echo "=== a different build-id on the disk does not count as a match ==="

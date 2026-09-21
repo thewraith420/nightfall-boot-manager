@@ -62,9 +62,17 @@ for disk in "$sysblock"/*; do
         [ "$p" = "$d" ] && continue
         [ -e "$devdir/$p" ] || continue
 
-        # A partition that will not mount read-only is not a candidate,
-        # whatever it is - same rule discover-backup-targets.sh uses.
-        mount -o ro "$devdir/$p" "$probe_dir" 2>/dev/null || continue
+        # -t vfat, not "whatever the kernel picks": the UEFI spec requires
+        # an ESP to be FAT, so anything else could never legitimately carry
+        # the loader being searched for - and mounting read-only with no
+        # type would also let the kernel pick ext4 for an external disk's
+        # real Linux root partition (exactly the "system on a disk usb"
+        # case this project cares about), which can still WRITE by
+        # replaying a dirty journal despite being asked for read-only.
+        # Restricting to vfat sidesteps that risk entirely rather than
+        # merely mitigating it - a partition that will not mount as vfat
+        # is not a candidate, whatever it actually is.
+        mount -t vfat -o ro "$devdir/$p" "$probe_dir" 2>/dev/null || continue
         loader=""
         if   [ -f "$probe_dir/EFI/BOOT/BOOTX64.EFI" ]; then loader='\EFI\BOOT\BOOTX64.EFI'
         elif [ -f "$probe_dir/EFI/BOOT/BOOTX64.efi" ]; then loader='\EFI\BOOT\BOOTX64.efi'

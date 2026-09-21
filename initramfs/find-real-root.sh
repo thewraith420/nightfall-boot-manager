@@ -48,11 +48,18 @@ for disk in "$sysblock"/*; do
         [ "$p" = "$d" ] && continue
         [ -e "$devdir/$p" ] || continue
 
-        # No -t: whatever native filesystem this partition holds, the
-        # kernel picks it - a partition this build's own root could
-        # never actually be on (a vfat ESP, a swap partition) just fails
-        # to mount and is skipped, the same as everywhere else here.
-        mount -o ro "$devdir/$p" "$probe_dir" 2>/dev/null || continue
+        # ext4 first, and with noload: a plain "ro" mount of a DIRTY ext4
+        # filesystem still replays its journal - a write - despite being
+        # asked for read-only, unless noload says not to. Every machine
+        # this has run on keeps root as ext4, and this script's whole job
+        # is walking partitions on whatever machine a roaming drive is
+        # plugged into next, some of which will not have been shut down
+        # cleanly. If it is not ext4 (a vfat ESP, a swap partition, or
+        # nothing this kernel has a driver for at all), fall back to
+        # letting the kernel pick - it just fails to mount and is skipped,
+        # the same as everywhere else here.
+        mount -t ext4 -o ro,noload "$devdir/$p" "$probe_dir" 2>/dev/null || \
+            mount -o ro "$devdir/$p" "$probe_dir" 2>/dev/null || continue
         match=""
         if [ -f "$probe_dir/boot/nightfall/build-id" ]; then
             id=$(cat "$probe_dir/boot/nightfall/build-id" 2>/dev/null || echo "")

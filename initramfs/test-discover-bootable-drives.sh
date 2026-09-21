@@ -71,6 +71,9 @@ write_mount_mock
 out=$(run)
 echo "$out" | grep -q "^/dev/sda1	" && ok "reports the partition that actually has the loader" || bad "not found: $out"
 echo "$out" | grep -qF '\EFI\BOOT\BOOTX64.EFI' && ok "and which loader path it is" || bad "loader field wrong: $out"
+grep -qE '^MOUNT -t vfat -o ro ' "$SB/log" \
+  && ok "mounts explicitly as vfat, never letting the kernel pick a type" \
+  || bad "mount call did not pin -t vfat (an ESP is always FAT; anything else risks probing an external disk's real ext4 root - and replaying its journal despite -o ro): $(grep MOUNT "$SB/log")"
 echo "$out" | grep -qE '\b57G\b' && ok "sizes the WHOLE DISK, not the small ESP" || bad "wrong size: $out"
 teardown
 
