@@ -89,6 +89,35 @@ sh "$SCRIPT" "$SB/near.cfg" | grep -q "7.2-nightfall-test" \
   && ok "a kernel merely named 'nightfall' is still listed" \
   || bad "over-excluded a real kernel because of its name"
 
+echo "=== 3b. unresolved GRUB variables never reach a kexec command line ==="
+# Ubuntu/Mint 10_linux puts $vt_handoff on every linux line. GRUB expands it
+# at its own boot time; this parser cannot, and kexec-boot.sh passes the
+# cmdline verbatim - so the literal text would land on the new kernel's
+# command line. The Slate's own grub.cfg never had one, which is why the
+# real-fixture assertions above could not see it.
+cat > "$SB/vt.cfg" <<'EOF'
+menuentry 'Ubuntu, with Linux 7.2.6' --class ubuntu {
+	linux	/boot/vmlinuz-7.2.6 root=UUID=abc ro quiet splash $vt_handoff
+	initrd	/boot/initrd.img-7.2.6
+}
+menuentry 'Braced' --class ubuntu {
+	linux	/boot/vmlinuz-7.2.7 $vt_handoff root=UUID=abc ${extra} ro
+	initrd	/boot/initrd.img-7.2.7
+}
+menuentry 'Embedded' --class ubuntu {
+	linux	/boot/vmlinuz-7.2.8 root=UUID=abc ro foo=$bar cost=5$
+	initrd	/boot/initrd.img-7.2.8
+}
+EOF
+vt=$(sh "$SCRIPT" "$SB/vt.cfg")
+echo "$vt" | grep -q 'vt_handoff' && bad "a literal \$vt_handoff reached the cmdline: $(echo "$vt" | head -1)" || ok "a bare \$vt_handoff is dropped"
+[ "$(echo "$vt" | sed -n 1p | cut -f4)" = "root=UUID=abc ro quiet splash" ] \
+  && ok "and the rest of the cmdline is untouched, with no stray space" || bad "cmdline mangled: [$(echo "$vt" | sed -n 1p | cut -f4)]"
+[ "$(echo "$vt" | sed -n 2p | cut -f4)" = "root=UUID=abc ro" ] \
+  && ok "a variable in the FIRST and a braced one in the MIDDLE both go, leaving no leading/double space" || bad "cmdline mangled: [$(echo "$vt" | sed -n 2p | cut -f4)]"
+[ "$(echo "$vt" | sed -n 3p | cut -f4)" = 'root=UUID=abc ro foo=$bar cost=5$' ] \
+  && ok "a token that merely CONTAINS a dollar sign is left alone (only whole-token references are dropped)" || bad "over-stripped: [$(echo "$vt" | sed -n 3p | cut -f4)]"
+
 echo "=== 4. degenerate input ==="
 : > "$SB/empty.cfg"
 out=$(sh "$SCRIPT" "$SB/empty.cfg"); rc=$?

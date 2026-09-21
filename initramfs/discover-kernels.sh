@@ -49,8 +49,20 @@ $1 == "submenu" {
 
 frame_type[depth] == "menuentry" && ($1 == "linux" || $1 == "linuxefi" || $1 == "linux16") {
     linux[depth] = $2
+    # A whole-token GRUB variable reference (vt_handoff, foo in braces) is
+    # dropped, not passed on: GRUB expands these at its own boot time, this
+    # parser cannot, and a kexec-booted kernel would otherwise receive the
+    # literal text on its command line. Ubuntu and Mint 10_linux add it to
+    # every entry; the Slate grub.cfg never had one, so nothing here saw it
+    # until a second machine config did. (vt.handoff=7 itself means nothing
+    # after a kexec - it hands GRUB display state to the kernel, and GRUB is
+    # long gone. NO apostrophes in this comment: it lives inside the shell
+    # single-quoted awk program.)
     c = ""
-    for (i = 3; i <= NF; i++) c = c (i > 3 ? " " : "") $i
+    for (i = 3; i <= NF; i++) {
+        if ($i ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/) continue
+        c = c (c != "" ? " " : "") $i
+    }
     cmdline[depth] = c
     next
 }
