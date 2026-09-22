@@ -2559,6 +2559,20 @@ static int backup_enabled(void) {
     return !(b && (!strcmp(b, "0") || !strcmp(b, "off")));
 }
 
+/* Set by init only when the real root it mounted is a SEPARATE /boot
+ * partition, not the actual Linux install (find-real-root.sh's "bootfs"
+ * layout). Install/Remove/Repair all run install-kernel.sh, remove-kernel.sh
+ * or repair-system.sh against that mount as if it were the real root -
+ * chroot "$root" /usr/sbin/update-grub, apt, dpkg, the lot - which on a
+ * boot-only mount has no userland to chroot into at all. That is not a
+ * missing feature to work around here; there is no real root known to
+ * Nightfall to point those scripts at. Unset (the historical case, and
+ * every machine where /boot lives on the real root) keeps all three rows. */
+static int boot_only(void) {
+    const char *b = getenv("NIGHTFALL_BOOT_ONLY");
+    return b && !strcmp(b, "1");
+}
+
 static void show_main_menu(void) {
     lv_obj_clean(g_list);
     lv_label_set_text(g_header, LV_SYMBOL_POWER "  Nightfall Boot Manager");
@@ -2579,17 +2593,19 @@ static void show_main_menu(void) {
     lv_obj_t *b = make_row_h(LV_SYMBOL_USB, buf, 0, MENU_ROW_H);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_kernel_list);
 
-    if (g_tarball_n > 0)
-        snprintf(buf, sizeof(buf), "Install a kernel   (%d available)", g_tarball_n);
-    else
-        snprintf(buf, sizeof(buf), "Install a kernel   (none found)");
-    b = make_row_h(LV_SYMBOL_DOWNLOAD, buf, g_tarball_n == 0, MENU_ROW_H);
-    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_install_list);
+    if (!boot_only()) {
+        if (g_tarball_n > 0)
+            snprintf(buf, sizeof(buf), "Install a kernel   (%d available)", g_tarball_n);
+        else
+            snprintf(buf, sizeof(buf), "Install a kernel   (none found)");
+        b = make_row_h(LV_SYMBOL_DOWNLOAD, buf, g_tarball_n == 0, MENU_ROW_H);
+        lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_install_list);
 
-    build_kernel_list();
-    snprintf(buf, sizeof(buf), "Remove a kernel   (%d installed)", g_kernel_n);
-    b = make_row_h(LV_SYMBOL_TRASH, buf, g_kernel_n <= 1, MENU_ROW_H);
-    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_remove_list);
+        build_kernel_list();
+        snprintf(buf, sizeof(buf), "Remove a kernel   (%d installed)", g_kernel_n);
+        b = make_row_h(LV_SYMBOL_TRASH, buf, g_kernel_n <= 1, MENU_ROW_H);
+        lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_remove_list);
+    }
 
     if (backup_enabled()) {
         if (g_backup_n > 0)
@@ -2602,8 +2618,10 @@ static void show_main_menu(void) {
         lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_backup_menu);
     }
 
-    b = make_row_h(LV_SYMBOL_SETTINGS, "Repair", 0, MENU_ROW_H);
-    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_repair_menu);
+    if (!boot_only()) {
+        b = make_row_h(LV_SYMBOL_SETTINGS, "Repair", 0, MENU_ROW_H);
+        lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_repair_menu);
+    }
 
     b = make_row_h(LV_SYMBOL_REFRESH, "Restart   (to the GRUB menu)", 0, MENU_ROW_H);
     lv_obj_add_event_cb(b, restart_cb, LV_EVENT_CLICKED, NULL);

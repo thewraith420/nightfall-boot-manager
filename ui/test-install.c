@@ -913,6 +913,37 @@ int main(void) {
         #undef HAS_BACKUP_ROW
     }
 
+    /* --- Install/Remove/Repair are hidden on a boot-only mount (separate
+     * /boot partition, find-real-root.sh's "bootfs" layout): those scripts
+     * chroot into $root as the real Linux install, and a boot-only mount
+     * has no userland there at all to chroot into. --- */
+    {
+        #define HAS_ROW(txt) ({ int _f = 0; lv_obj_update_layout(lv_screen_active()); \
+            for (uint32_t _i = 0; _i < lv_obj_get_child_count(g_list); _i++) { \
+                lv_obj_t *_r = lv_obj_get_child(g_list, _i); lv_obj_t *_l = lv_obj_get_child(_r, 0); \
+                if (_l && lv_obj_check_type(_l, &lv_label_class) && strstr(lv_label_get_text(_l), txt)) _f = 1; } _f; })
+        unsetenv("NIGHTFALL_BOOT_ONLY");
+        ck(boot_only() == 0, "unset means a normal root - every machine before this existed, and the Slate");
+        show_main_menu();
+        int rows_on = (int)lv_obj_get_child_count(g_list);
+        ck(HAS_ROW("Install a kernel") && HAS_ROW("Remove a kernel") && HAS_ROW("Repair"),
+           "all three rows present on a normal (non-boot-only) root");
+        setenv("NIGHTFALL_BOOT_ONLY", "1", 1);
+        ck(boot_only() == 1, "init's 1 (set only for the bootfs layout) is recognised");
+        show_main_menu();
+        ck(!HAS_ROW("Install a kernel") && !HAS_ROW("Remove a kernel") && !HAS_ROW("Repair"),
+           "all three are hidden - none of them can work with no real root mounted");
+        ck((int)lv_obj_get_child_count(g_list) == rows_on - 3, "and it is exactly those three rows that go");
+        lv_obj_t *c[NAV_MAX];
+        int nn = nav_candidates(c);
+        ck(nn == rows_on - 3, "the keyboard skips the rows that are not there");
+        unsetenv("NIGHTFALL_BOOT_ONLY");
+        show_main_menu();
+        ck(HAS_ROW("Install a kernel") && HAS_ROW("Remove a kernel") && HAS_ROW("Repair"),
+           "unsetting it again brings all three back");
+        #undef HAS_ROW
+    }
+
     printf("\npassed: %d  failed: %d\n", passes, fails);
     return fails ? 1 : 0;
 }
