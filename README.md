@@ -387,9 +387,11 @@ logs (`display ready`, `splash drawn`, `touch ready`, `menu drawn`,
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `NIGHTFALL_ROTATE` | `270` (set by `init`) | Panel rotation: 0/90/180/270 |
+| `NIGHTFALL_ROTATE` | board-based (set by `init`): `270` on a Nocturne, `0` elsewhere | Panel rotation: 0/90/180/270 |
+| `NIGHTFALL_UI_SCALE` | computed from the screen | UI size in percent (25-300). Normally the short side of the display against the Slate's 2000px (the Slate is exactly 100; 1080p is 54; anything within 5% of the Slate snaps to it), which also picks the font (14/20/28/36/48px). Set it when a display's size is misjudged |
+| `NIGHTFALL_INPUT_GRACE_SECS` | `4` | Once a keyboard or mouse is found, how long to keep waiting for a touchscreen before going on without one |
 | `NIGHTFALL_TIMEOUT_SECS` | `30` | Auto-boot the first entry; `0` disables |
-| `NIGHTFALL_WAIT_SECS` | `20` | How long `picker` waits for DRM and touch |
+| `NIGHTFALL_WAIT_SECS` | `20` | How long `picker` waits for DRM and for an input device (touch, keyboard or mouse) |
 | `NIGHTFALL_WAIT_ROOT` | `15` | How long `init` waits for the root device |
 | `NIGHTFALL_FALLBACK_PAUSE` | `8` | On-screen hold before a fallback kexec |
 | `NIGHTFALL_AUTOROTATE` | on | `0`/`off` pins the rotation instead of following the accelerometer |

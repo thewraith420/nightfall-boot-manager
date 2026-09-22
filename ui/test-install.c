@@ -829,6 +829,60 @@ int main(void) {
         #undef PUMP
     }
 
+    /* --- resolution scaling --- */
+    {
+        unsetenv("NIGHTFALL_UI_SCALE");
+        /* The Slate is the reference: it must not change by a single pixel. */
+        ck(ui_scale_pct_for(3000, 2000) == 100 && ui_scale_pct_for(2000, 3000) == 100,
+           "the Slate's panel, in either orientation, is exactly 100%");
+        ui_scale_init(3000, 2000);
+        ck(ROW_H == 130 && MENU_ROW_H == 260 && DIALOG_BTN_H == 115 && DIALOG_BTN_GAP == 28 && EDIT_TA_H == 220,
+           "and every size the UI was tuned to is EXACTLY what it was before scaling existed");
+        ck(ui_px(16) == 16 && ui_px(8) == 8 && ui_px(260) == 260, "including the small paddings and the spinner");
+        ck(ui_font_for_pct(g_scale_pct) == &lv_font_montserrat_36, "and the font is still the 36px one");
+        ck(ui_scale_pct_for(1999, 3000) == 100 && ui_scale_pct_for(2100, 3000) == 100,
+           "a panel within 5% of the reference snaps to it, so 1999 does not nudge every size");
+
+        /* Other machines. */
+        ck(ui_scale_pct_for(1920, 1080) == 54, "1080p is 54%");
+        ck(ui_scale_pct_for(1366, 768) == 38, "a 1366x768 laptop is 38%");
+        ck(ui_scale_pct_for(3840, 2160) == 108, "4K is 108%");
+        ck(ui_scale_pct_for(320, 200) == 30 && ui_scale_pct_for(20000, 16000) == 250,
+           "absurd sizes are clamped, so a bad EDID cannot collapse or balloon the UI");
+
+        ui_scale_init(1920, 1080);
+        ck(g_scale_pct == 54 && ROW_H == 70 && DIALOG_BTN_H == 62, "at 1080p rows and buttons shrink proportionally");
+        ck(MENU_ROW_H * 7 <= 1080, "and the seven main-menu rows alone fit a 1080p screen without scrolling");
+        show_main_menu();
+        lv_obj_update_layout(lv_screen_active());
+        ck((int)lv_obj_get_height(lv_obj_get_child(g_list, 0)) == MENU_ROW_H, "the rows actually built use the scaled height, not a baked-in one");
+        show_kernel_list();
+        lv_obj_update_layout(lv_screen_active());
+        ck((int)lv_obj_get_height(lv_obj_get_child(g_list, 0)) == ROW_H, "sub-screen rows too");
+
+        /* Fonts: the closest compiled size. */
+        ck(ui_font_for_pct(38) == &lv_font_montserrat_14 && ui_font_for_pct(54) == &lv_font_montserrat_20 &&
+           ui_font_for_pct(72) == &lv_font_montserrat_28 && ui_font_for_pct(108) == &lv_font_montserrat_36 &&
+           ui_font_for_pct(140) == &lv_font_montserrat_48, "the font follows the scale through all five compiled sizes");
+        ck(ui_font_for_pct(84) == &lv_font_montserrat_28 && ui_font_for_pct(85) == &lv_font_montserrat_36, "with the boundary where it is documented");
+
+        /* The override. */
+        setenv("NIGHTFALL_UI_SCALE", "150", 1);
+        ui_scale_init(1920, 1080);
+        ck(g_scale_pct == 150, "NIGHTFALL_UI_SCALE overrides the computed value");
+        setenv("NIGHTFALL_UI_SCALE", "abc", 1); ui_scale_init(1920, 1080);
+        ck(g_scale_pct == 54, "garbage is ignored");
+        setenv("NIGHTFALL_UI_SCALE", "10", 1); ui_scale_init(1920, 1080);
+        ck(g_scale_pct == 54, "a value below 25 is ignored");
+        setenv("NIGHTFALL_UI_SCALE", "999", 1); ui_scale_init(1920, 1080);
+        ck(g_scale_pct == 54, "and one above 300");
+        unsetenv("NIGHTFALL_UI_SCALE");
+
+        ui_scale_init(3000, 2000);   /* leave the reference scale for anything after */
+        lv_obj_clean(lv_layer_top());
+        show_main_menu();
+    }
+
     printf("\npassed: %d  failed: %d\n", passes, fails);
     return fails ? 1 : 0;
 }

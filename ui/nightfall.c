@@ -67,8 +67,58 @@
  * =~ 293 px/inch. The theme scales its padding/spacing from this, and
  * it's what makes the size constants below mean real-world distances. */
 #define PANEL_DPI 293
-#define DIALOG_BTN_H 115   /* ~1cm at 293 PPI - comfortable touch target */
-#define ROW_H 130          /* kernel list row: ~1.1cm, fits the 36px font */
+
+/* SCALING. Every fixed pixel size in this file was tuned against the Slate's
+ * panel (short side 2000px, 293 PPI, 36px font). Other machines get those
+ * sizes scaled by how their short side compares - a 1080p screen would
+ * otherwise show a handful of huge rows. ui_px() is the ONE place a
+ * Slate-tuned size becomes a real one. Pixels, not EDID physical size: EDID
+ * dimensions are missing or wrong on TVs, projectors and VMs, and a layout
+ * that depends on them is unpredictable. */
+#define REF_SHORT_SIDE 2000
+static int g_scale_pct = 100;
+static int ui_px(int v) {
+    int r = (int)(((long)v * g_scale_pct + 50) / 100);
+    return (r < 1 && v > 0) ? 1 : r;
+}
+
+/* Percent for a logical display size. The Slate must come out at EXACTLY 100
+ * (so nothing on it changes by a pixel), so anything within 5% snaps to it;
+ * the rest is clamped so a strange EDID can neither collapse nor balloon the UI. */
+static int ui_scale_pct_for(int cw, int ch) {
+    int side = cw < ch ? cw : ch;
+    int pct = (int)((long)side * 100 / REF_SHORT_SIDE);
+    if (pct >= 95 && pct <= 105) pct = 100;
+    if (pct < 30) pct = 30;
+    if (pct > 250) pct = 250;
+    return pct;
+}
+
+/* The closest compiled Montserrat size. The bitmap fonts cannot be scaled,
+ * so the UI picks the one whose proportion to the row height is nearest the
+ * Slate's (36px in a 130px row). */
+static const lv_font_t *ui_font_for_pct(int pct) {
+    if (pct >= 130) return &lv_font_montserrat_48;
+    if (pct >= 85)  return &lv_font_montserrat_36;
+    if (pct >= 62)  return &lv_font_montserrat_28;
+    if (pct >= 45)  return &lv_font_montserrat_20;
+    return &lv_font_montserrat_14;
+}
+
+/* NIGHTFALL_UI_SCALE=<percent> overrides the computed value (25-300): the
+ * escape hatch for a display whose size is misjudged, settable from the
+ * kernel command line like the other NIGHTFALL_* knobs. */
+static void ui_scale_init(int cw, int ch) {
+    g_scale_pct = ui_scale_pct_for(cw, ch);
+    const char *e = getenv("NIGHTFALL_UI_SCALE");
+    if (e && *e) {
+        int v = atoi(e);
+        if (v >= 25 && v <= 300) g_scale_pct = v;
+    }
+}
+
+#define DIALOG_BTN_H ui_px(115)   /* ~1cm at 293 PPI - comfortable touch target */
+#define ROW_H ui_px(130)          /* kernel list row: ~1.1cm, fits the 36px font */
 /* The top menu has two entries on a 3000px-tall screen, so list-sized
  * rows leave it looking like an error state. Double height reads as a
  * deliberate choice and gives a bigger target for the one screen you
@@ -79,7 +129,7 @@
  * one shrinks the other. 45% of a 3000px-tall logical display leaves
  * ~337px per key row, comfortably over the ~1cm touch target. */
 #define KEYBOARD_PCT_H 45
-#define EDIT_TA_H 220      /* ~4 wrapped lines of the 36px font */
+#define EDIT_TA_H ui_px(220)   /* ~4 wrapped lines of the 36px font */
 /* Confirm dialog's 2x2 button grid. These two are coupled: the row has
  * to fit 2*DIALOG_BTN_W plus one DIALOG_BTN_GAP, so widening the
  * buttons back to 50% makes any nonzero gap overflow and wrap the grid
@@ -87,7 +137,7 @@
  * at this dialog width is ~60px of room for a 28px gap. Asserted in
  * test-edit-layout.c so the pair cannot drift apart unnoticed. */
 #define DIALOG_BTN_W_PCT 47
-#define DIALOG_BTN_GAP 28
+#define DIALOG_BTN_GAP ui_px(28)
 #define VT_RELEASE_SIG SIGUSR1
 #define VT_ACQUIRE_SIG SIGUSR2
 #define POLL_PERIOD_MS 30
@@ -1285,7 +1335,7 @@ static void edit_cb(lv_event_t *e) {
      * dialog fights it for space. Pin the dialog to the top and cap its
      * height at what is left. */
     lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
-    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, ui_px(16));
 
     /* Two ways to accept, because they mean different things: use it
      * for this boot, or remember it for this kernel every boot. The
@@ -1635,7 +1685,7 @@ static void show_progress(const char *heading, const char *subject, const char *
     lv_obj_set_style_text_color(title, lv_color_hex(0xe8eef4), 0);
 
     g_prog_spinner = lv_spinner_create(g_list);
-    lv_obj_set_size(g_prog_spinner, 160, 160);
+    lv_obj_set_size(g_prog_spinner, ui_px(160), ui_px(160));
 
     g_prog_status = lv_label_create(g_list);
     lv_label_set_text(g_prog_status, "starting...");
@@ -2224,7 +2274,7 @@ static void rename_click_cb(lv_event_t *e) {
     lv_keyboard_set_textarea(ctx->kb, ctx->ta);
 
     lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
-    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, ui_px(16));
 
     lv_obj_t *go = lv_msgbox_add_footer_button(ctx->mbox, "Rename");
     lv_obj_t *no = lv_msgbox_add_footer_button(ctx->mbox, "Cancel");
@@ -2285,7 +2335,7 @@ static void backup_click_cb(lv_event_t *e) {
     lv_keyboard_set_textarea(ctx->kb, ctx->ta);
 
     lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
-    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, ui_px(16));
 
     lv_obj_t *go = lv_msgbox_add_footer_button(ctx->mbox, "Back up");
     lv_obj_t *no = lv_msgbox_add_footer_button(ctx->mbox, "Cancel");
@@ -2474,14 +2524,14 @@ static lv_obj_t *make_row_h(const char *icon, const char *text, int dimmed, int 
     lv_obj_set_height(btn, h);
     lv_obj_set_style_bg_color(btn, lv_color_hex(dimmed ? 0x161d26 : 0x1c2530), 0);
     lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3a4d), LV_STATE_PRESSED);
-    lv_obj_set_style_radius(btn, 10, 0);
+    lv_obj_set_style_radius(btn, ui_px(10), 0);
 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text_fmt(label, "%s  %s", icon, text);
     lv_obj_set_style_text_color(label, lv_color_hex(dimmed ? 0x93a0aa : 0xe8eef4), 0);
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
     lv_obj_set_width(label, lv_pct(100));
-    lv_obj_align(label, LV_ALIGN_LEFT_MID, 16, 0);
+    lv_obj_align(label, LV_ALIGN_LEFT_MID, ui_px(16), 0);
     return btn;
 }
 
@@ -3073,7 +3123,7 @@ static void show_kernel_list(void) {
         lv_obj_set_height(btn, ROW_H);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x1c2530), 0);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3a4d), LV_STATE_PRESSED);
-        lv_obj_set_style_radius(btn, 10, 0);
+        lv_obj_set_style_radius(btn, ui_px(10), 0);
 
         /* The default-entry checkmark sits at a fixed spot on the
          * right so it's never pushed out of view by a long title -
@@ -3084,13 +3134,13 @@ static void show_kernel_list(void) {
         lv_obj_set_style_text_color(label, lv_color_hex(0xe8eef4), 0);
         lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
         lv_obj_set_width(label, lv_pct(g_entries[i].is_default ? 82 : 100));
-        lv_obj_align(label, LV_ALIGN_LEFT_MID, 16, 0);
+        lv_obj_align(label, LV_ALIGN_LEFT_MID, ui_px(16), 0);
 
         if (g_entries[i].is_default) {
             lv_obj_t *mark = lv_label_create(btn);
             lv_label_set_text(mark, LV_SYMBOL_OK);
             lv_obj_set_style_text_color(mark, lv_color_hex(0x8ec6ff), 0);
-            lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -16, 0);
+            lv_obj_align(mark, LV_ALIGN_RIGHT_MID, -ui_px(16), 0);
         }
         lv_obj_add_event_cb(btn, row_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
@@ -3133,8 +3183,8 @@ static void build_ui(struct entry *entries, int n, int timeout_secs, lv_obj_t **
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x101418), 0);
     lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(scr, 16, 0);
-    lv_obj_set_style_pad_row(scr, 10, 0);
+    lv_obj_set_style_pad_all(scr, ui_px(16), 0);
+    lv_obj_set_style_pad_row(scr, ui_px(10), 0);
 
     g_header = lv_label_create(scr);
     lv_obj_set_style_text_color(g_header, lv_color_hex(0x8ec6ff), 0);
@@ -3152,7 +3202,7 @@ static void build_ui(struct entry *entries, int n, int timeout_secs, lv_obj_t **
     lv_obj_set_width(g_list, lv_pct(100));
     lv_obj_set_flex_grow(g_list, 1);
     lv_obj_set_flex_flow(g_list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(g_list, 8, 0);
+    lv_obj_set_style_pad_row(g_list, ui_px(8), 0);
     lv_obj_set_style_bg_opa(g_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(g_list, 0, 0);
 
@@ -3288,10 +3338,10 @@ static lv_obj_t *splash_create(const char *line) {
     lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
     lv_obj_set_flex_flow(s, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(s, 48, 0);
+    lv_obj_set_style_pad_row(s, ui_px(48), 0);
 
     lv_obj_t *sp = lv_spinner_create(s);
-    lv_obj_set_size(sp, 260, 260);
+    lv_obj_set_size(sp, ui_px(260), ui_px(260));
     lv_obj_set_style_arc_width(sp, 18, LV_PART_MAIN);
     lv_obj_set_style_arc_width(sp, 18, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(sp, lv_color_hex(0x3d7ee8), LV_PART_INDICATOR);
@@ -3389,7 +3439,7 @@ static void nav_focus_deleted_cb(lv_event_t *e) {
 static void nav_style_init(void) {
     if (g_nav_style_ready) return;
     lv_style_init(&g_nav_style);
-    lv_style_set_border_width(&g_nav_style, 8);
+    lv_style_set_border_width(&g_nav_style, ui_px(8));
     lv_style_set_border_color(&g_nav_style, lv_color_hex(0x8ec6ff));
     lv_style_set_border_opa(&g_nav_style, LV_OPA_COVER);
     lv_style_set_border_side(&g_nav_style, LV_BORDER_SIDE_FULL);
@@ -3617,12 +3667,12 @@ static void mouse_cursor_show(struct nightfall_ctx *ctx) {
     if (!g_cursor) {
         g_cursor = lv_obj_create(lv_layer_sys());
         lv_obj_remove_style_all(g_cursor);
-        lv_obj_set_size(g_cursor, 26, 26);
+        lv_obj_set_size(g_cursor, ui_px(26), ui_px(26));
         lv_obj_set_style_radius(g_cursor, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(g_cursor, lv_color_hex(0xffffff), 0);
         lv_obj_set_style_bg_opa(g_cursor, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(g_cursor, lv_color_hex(0x1c2530), 0);
-        lv_obj_set_style_border_width(g_cursor, 4, 0);
+        lv_obj_set_style_border_width(g_cursor, ui_px(4), 0);
         lv_obj_remove_flag(g_cursor, LV_OBJ_FLAG_CLICKABLE);
         if (ctx->indev) lv_indev_set_cursor(ctx->indev, g_cursor);
     }
@@ -3878,8 +3928,11 @@ int main(int argc, char **argv) {
      * freeze (see the LV_STDLIB_CLIB note in lv_conf.h). */
     lv_log_register_print_cb(lvgl_log_to_stderr);
     lv_display_t *disp = lv_display_create(ctx.cw, ctx.ch);
-    /* Must be set before lv_theme_default_init(), which samples it once. */
-    lv_display_set_dpi(disp, PANEL_DPI);
+    ui_scale_init(ctx.cw, ctx.ch);
+    fprintf(stderr, "nightfall: display %dx%d, UI scale %d%%\n", ctx.cw, ctx.ch, g_scale_pct);
+    /* Must be set before lv_theme_default_init(), which samples it once. The
+     * DPI scales with the UI so the theme's own padding follows the rows. */
+    lv_display_set_dpi(disp, PANEL_DPI * g_scale_pct / 100);
     lv_display_set_user_data(disp, &ctx);
     lv_display_set_flush_cb(disp, flush_cb);
     /* Sized for the LARGER dimension, not the current one. A 90-degree
@@ -3899,7 +3952,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     lv_display_set_buffers(disp, lvgl_buf, NULL, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
-    lv_theme_t *theme = lv_theme_default_init(disp, lv_color_hex(0x3d7ee8), lv_color_hex(0x8ec6ff), true, LV_FONT_DEFAULT);
+    lv_theme_t *theme = lv_theme_default_init(disp, lv_color_hex(0x3d7ee8), lv_color_hex(0x8ec6ff), true, ui_font_for_pct(g_scale_pct));
     lv_display_set_theme(disp, theme);
 
     /* Something alive on screen from the moment the display is ours. The
