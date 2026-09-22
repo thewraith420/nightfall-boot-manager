@@ -13,8 +13,11 @@
 # LOCKDOWN is the decisive signal, not Secure Boot: lockdown is what actually
 # refuses kexec_load. A Secure Boot machine whose kernel came up with lockdown
 # "none" can still kexec, so keying on Secure Boot alone would raise a false
-# alarm. Secure Boot only enriches the message (it is usually WHY lockdown is
-# on, and it is what the person has to turn off).
+# alarm. Secure Boot only shapes the ADVICE: on distribution kernels it is
+# often why lockdown is on, but the Nightfall kernel does not lock down under
+# Secure Boot (LOCK_DOWN_KERNEL_FORCE_NONE), so here lockdown mostly means a
+# lockdown= option on the command line - and telling someone to turn off a
+# Secure Boot that is already off would send them the wrong way.
 #
 # Cannot tell (no lockdown file: no securityfs, or a kernel without the
 # lockdown LSM) means "not blocked" - the failure mode of guessing wrong the
@@ -43,12 +46,17 @@ fi
 
 # An efivar is 4 attribute bytes then the data; SecureBoot's data is one byte,
 # 1 when enabled. od is in the initramfs for exactly this.
-secure_boot=""
+secure_boot=unknown
 if [ -r "$SBVAR" ]; then
     v=$(tail -c1 "$SBVAR" 2>/dev/null | od -An -tu1 2>/dev/null) || v=""
     set -- $v
-    [ "${1:-}" = 1 ] && secure_boot=" Secure Boot is enabled."
+    if [ "${1:-}" = 1 ]; then secure_boot=on; else secure_boot=off; fi
 fi
 
-echo "kernel lockdown is '$mode', which refuses kexec.$secure_boot Turn Secure Boot off in the firmware settings to boot kernels from Nightfall."
+case "$secure_boot" in
+    on)  advice="Secure Boot is enabled. Turn Secure Boot off in the firmware settings to boot kernels from Nightfall." ;;
+    off) advice="Secure Boot is off, so this comes from a lockdown= option: remove it from the kernel command line to boot kernels from Nightfall." ;;
+    *)   advice="Turn Secure Boot off in the firmware settings, or remove any lockdown= option from the kernel command line, to boot kernels from Nightfall." ;;
+esac
+echo "kernel lockdown is '$mode', which refuses kexec. $advice"
 exit 1

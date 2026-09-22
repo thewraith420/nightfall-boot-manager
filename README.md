@@ -203,19 +203,24 @@ honest list of what a different machine has to satisfy today. Anything not on
 it is not supported yet.
 
 - **Secure Boot must be OFF.** This is a decision, not an oversight: there is
-  no signing work planned. Two separate reasons: the Nightfall kernel is a
-  custom, unsigned build, so firmware/shim will not run it with Secure Boot
-  on; and even a kernel that does run under Secure Boot usually comes up in
-  kernel *lockdown*, which refuses the legacy `kexec_load` call Nightfall
-  boots kernels with. Turn Secure Boot off in the firmware settings.
-  Nightfall checks for the second case up front (`initramfs/kexec-preflight.sh`
-  reads `/sys/kernel/security/lockdown`): instead of failing at the last
-  moment, the Boot screen shows a warning banner, tapping a kernel explains
-  why it can't be booted, and the auto-boot countdown is disabled so the
-  message can be read. Only kexec is affected - booting a *drive*, backups and
-  repairs still work under lockdown. (Switching to `kexec -s`, which lockdown
-  permits for a signed kernel, is a possible later step; nothing needs to
-  change kernel-side for it.)
+  no signing work planned. The reason is simple - the Nightfall kernel is a
+  custom, unsigned build, so with Secure Boot on the firmware/bootloader
+  refuses to load it and **Nightfall never starts** (so it cannot detect or
+  explain anything). Turn Secure Boot off in the firmware settings.
+- **Kernel lockdown is a separate, rarer condition.** It refuses the legacy
+  `kexec_load` call Nightfall boots kernels with. Distribution kernels often
+  switch it on automatically under Secure Boot, but the Nightfall kernel does
+  not (it is built `LOCK_DOWN_KERNEL_FORCE_NONE`; per the kernel maintainer,
+  mainline does not auto-lock-down on EFI Secure Boot), so it only appears if
+  someone passes `lockdown=` on the command line or uses a kernel built
+  differently. Nightfall still checks for it up front
+  (`initramfs/kexec-preflight.sh` reads `/sys/kernel/security/lockdown`):
+  instead of failing at the last moment, the Boot screen shows a warning
+  banner, tapping a kernel explains why it can't be booted, and the auto-boot
+  countdown is disabled so the message can be read. Only kexec is affected -
+  booting a *drive*, backups and repairs still work under lockdown.
+  (Switching to `kexec -s`, which lockdown permits for a signed kernel, is a
+  possible later step; nothing needs to change kernel-side for it.)
 - **Backup is Slate-only.** The Back up / Restore menu row is hidden on any
   board that does not identify itself as a Nocturne (an unreadable board
   name keeps it, so the Slate can never lose it to a missing sysfs file).

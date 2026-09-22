@@ -40,12 +40,15 @@ out=$(run 'none integrity [confidentiality]\n'); rc=$?
 out=$(run 'none [integrity] confidentiality' ); rc=$?
 [ $rc = 1 ] && ok "a newline-less lockdown file is still read (the read() gotcha)" || bad "newline-less lockdown missed: rc=$rc"
 
-echo "=== Secure Boot is only explanatory ==="
+echo "=== Secure Boot only shapes the advice ==="
 out=$(run 'none [integrity] confidentiality\n' '\001'); rc=$?
-[ $rc = 1 ] && echo "$out" | grep -q "Secure Boot is enabled" && ok "Secure Boot ON + lockdown: says so" || bad "rc=$rc out=$out"
+[ $rc = 1 ] && echo "$out" | grep -q "Secure Boot is enabled. Turn Secure Boot off" && ok "Secure Boot ON + lockdown: says so and tells them to turn it off" || bad "rc=$rc out=$out"
 out=$(run 'none [integrity] confidentiality\n' '\000'); rc=$?
-[ $rc = 1 ] && ! echo "$out" | grep -q "Secure Boot is enabled" && ok "Secure Boot OFF + lockdown (lockdown= on the cmdline): blocked, without blaming Secure Boot" || bad "rc=$rc out=$out"
-echo "$out" | grep -qi "firmware settings" && ok "and always says what to do about it" || bad "no remedy in: $out"
+[ $rc = 1 ] && echo "$out" | grep -q "lockdown= option" && ! echo "$out" | grep -q "Turn Secure Boot off" \
+  && ok "Secure Boot OFF + lockdown: points at lockdown= on the command line, NOT at a Secure Boot that is already off" || bad "rc=$rc out=$out"
+out=$(run 'none [integrity] confidentiality\n'); rc=$?
+[ $rc = 1 ] && echo "$out" | grep -q "Secure Boot off in the firmware" && echo "$out" | grep -q "lockdown= option" \
+  && ok "Secure Boot state UNKNOWN (no efivar): offers both remedies" || bad "rc=$rc out=$out"
 
 echo
 printf 'passed: %d   failed: %d\n' "$pass" "$fail"
