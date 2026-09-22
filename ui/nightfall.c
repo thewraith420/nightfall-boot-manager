@@ -2551,6 +2551,14 @@ static void add_back_row(void (*target)(void)) {
     lv_obj_add_flag(b, LV_OBJ_FLAG_USER_1);
 }
 
+/* Back up / Restore is a Slate feature (init sets NIGHTFALL_BACKUP=0 on any
+ * other board). Unset means ON: a hand-run Nightfall, the tests and an image
+ * from before this existed all keep the row. Only the menu row is gated. */
+static int backup_enabled(void) {
+    const char *b = getenv("NIGHTFALL_BACKUP");
+    return !(b && (!strcmp(b, "0") || !strcmp(b, "off")));
+}
+
 static void show_main_menu(void) {
     lv_obj_clean(g_list);
     lv_label_set_text(g_header, LV_SYMBOL_POWER "  Nightfall Boot Manager");
@@ -2583,14 +2591,16 @@ static void show_main_menu(void) {
     b = make_row_h(LV_SYMBOL_TRASH, buf, g_kernel_n <= 1, MENU_ROW_H);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_remove_list);
 
-    if (g_backup_n > 0)
-        snprintf(buf, sizeof(buf), "Back up / Restore   (%d backup%s)",
-                 g_backup_n, g_backup_n == 1 ? "" : "s");
-    else
-        snprintf(buf, sizeof(buf), "Back up / Restore   (%d drive%s)",
-                 g_target_n, g_target_n == 1 ? "" : "s");
-    b = make_row_h(LV_SYMBOL_SAVE, buf, g_target_n == 0 && g_backup_n == 0, MENU_ROW_H);
-    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_backup_menu);
+    if (backup_enabled()) {
+        if (g_backup_n > 0)
+            snprintf(buf, sizeof(buf), "Back up / Restore   (%d backup%s)",
+                     g_backup_n, g_backup_n == 1 ? "" : "s");
+        else
+            snprintf(buf, sizeof(buf), "Back up / Restore   (%d drive%s)",
+                     g_target_n, g_target_n == 1 ? "" : "s");
+        b = make_row_h(LV_SYMBOL_SAVE, buf, g_target_n == 0 && g_backup_n == 0, MENU_ROW_H);
+        lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_backup_menu);
+    }
 
     b = make_row_h(LV_SYMBOL_SETTINGS, "Repair", 0, MENU_ROW_H);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_repair_menu);

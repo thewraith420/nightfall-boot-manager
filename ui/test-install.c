@@ -883,6 +883,36 @@ int main(void) {
         show_main_menu();
     }
 
+    /* --- Back up / Restore is a Slate feature --- */
+    {
+        #define HAS_BACKUP_ROW() ({ int _f = 0; lv_obj_update_layout(lv_screen_active()); \
+            for (uint32_t _i = 0; _i < lv_obj_get_child_count(g_list); _i++) { \
+                lv_obj_t *_r = lv_obj_get_child(g_list, _i); lv_obj_t *_l = lv_obj_get_child(_r, 0); \
+                if (_l && lv_obj_check_type(_l, &lv_label_class) && strstr(lv_label_get_text(_l), "Back up / Restore")) _f = 1; } _f; })
+        unsetenv("NIGHTFALL_BACKUP");
+        ck(backup_enabled() == 1, "unset means shown: a hand-run Nightfall, the tests and an older image keep the row");
+        show_main_menu();
+        int rows_on = (int)lv_obj_get_child_count(g_list);
+        ck(HAS_BACKUP_ROW(), "the main menu has its Back up / Restore row");
+        setenv("NIGHTFALL_BACKUP", "0", 1);
+        ck(backup_enabled() == 0, "init's 0 turns it off");
+        show_main_menu();
+        ck(!HAS_BACKUP_ROW() && (int)lv_obj_get_child_count(g_list) == rows_on - 1, "and it is exactly that one row that goes");
+        setenv("NIGHTFALL_BACKUP", "off", 1);
+        ck(backup_enabled() == 0, "'off' works too");
+        setenv("NIGHTFALL_BACKUP", "1", 1);
+        show_main_menu();
+        ck(backup_enabled() == 1 && HAS_BACKUP_ROW(), "1 shows it");
+        setenv("NIGHTFALL_BACKUP", "0", 1);
+        show_main_menu();
+        lv_obj_t *c[NAV_MAX];
+        int nn = nav_candidates(c);
+        ck(nn == rows_on - 1, "the keyboard skips a row that is not there");
+        unsetenv("NIGHTFALL_BACKUP");
+        show_main_menu();
+        #undef HAS_BACKUP_ROW
+    }
+
     printf("\npassed: %d  failed: %d\n", passes, fails);
     return fails ? 1 : 0;
 }

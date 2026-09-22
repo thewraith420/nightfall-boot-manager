@@ -550,14 +550,14 @@ fi
 # board that POSITIVELY identifies as not-a-Nocturne gets 0, so nothing that
 # worked on the Slate can start coming up sideways because a sysfs file went
 # missing. An empty-but-readable name (some VMs) counts as "not a Nocturne".
+_board=""
+_board_known=""
+if [ -r /sys/class/dmi/id/board_name ]; then
+    _board_known=1
+    # `|| :`, not `|| _board=""` - same newline-less-file gotcha as above.
+    read -r _board < /sys/class/dmi/id/board_name 2>/dev/null || :
+fi
 if [ -z "${NIGHTFALL_ROTATE:-}" ]; then
-    _board=""
-    _board_known=""
-    if [ -r /sys/class/dmi/id/board_name ]; then
-        _board_known=1
-        # `|| :`, not `|| _board=""` - same newline-less-file gotcha as above.
-        read -r _board < /sys/class/dmi/id/board_name 2>/dev/null || :
-    fi
     case "$_board_known:$_board" in
         :*)                    NIGHTFALL_ROTATE=270
                                stage "rotation 270 (default: board name unreadable, assuming the Slate)" ;;
@@ -568,6 +568,41 @@ if [ -z "${NIGHTFALL_ROTATE:-}" ]; then
     esac
 fi
 export NIGHTFALL_ROTATE
+
+# Back up / Restore is a Slate feature: it exists because the Slate is a
+# keyboardless tablet with no other way to get a safety copy of itself, and
+# it is not wanted on a general PC (Bob's call). So the menu row shows on a
+# Nocturne and is hidden on any board that says it is something else. Same
+# fail-safe as the rotation default: a board name that cannot be read at all
+# keeps the historical behaviour (shown), so a missing sysfs file can never
+# take a feature away from the machine it was built for. Precedence, most
+# specific first: /boot/nightfall-backup (1/on or 0/off), NIGHTFALL_BACKUP on
+# the kernel command line, then the board. Only the MENU is gated - the
+# scripts stay in the image and nothing else reads this.
+BACKUP_FILE=/mnt/root/boot/nightfall-backup
+if [ -f "$BACKUP_FILE" ]; then
+    _bk=""
+    # `|| :`, not `|| _bk=""` - see the build-id read above.
+    read -r _bk < "$BACKUP_FILE" 2>/dev/null || :
+    case "$_bk" in
+        1|on)  NIGHTFALL_BACKUP=1
+               stage "backup menu on (from nightfall-backup)" ;;
+        0|off) NIGHTFALL_BACKUP=0
+               stage "backup menu off (from nightfall-backup)" ;;
+        *)     warn "ignoring $BACKUP_FILE: expected 1, 0, on or off" ;;
+    esac
+fi
+if [ -z "${NIGHTFALL_BACKUP:-}" ]; then
+    case "$_board_known:$_board" in
+        :*)                      NIGHTFALL_BACKUP=1
+                                 stage "backup menu on (default: board name unreadable, assuming the Slate)" ;;
+        1:Nocturne*|1:nocturne*) NIGHTFALL_BACKUP=1
+                                 stage "backup menu on (default: board is a Nocturne)" ;;
+        *)                       NIGHTFALL_BACKUP=0
+                                 stage "backup menu off (default: board is '${_board}', not a Nocturne)" ;;
+    esac
+fi
+export NIGHTFALL_BACKUP
 
 # stderr goes to a file rather than the console: it carries picker's own
 # diagnostics (chosen touch device, DRM open failures) plus LVGL's log,

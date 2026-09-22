@@ -216,6 +216,12 @@ it is not supported yet.
   repairs still work under lockdown. (Switching to `kexec -s`, which lockdown
   permits for a signed kernel, is a possible later step; nothing needs to
   change kernel-side for it.)
+- **Backup is Slate-only.** The Back up / Restore menu row is hidden on any
+  board that does not identify itself as a Nocturne (an unreadable board
+  name keeps it, so the Slate can never lose it to a missing sysfs file).
+  This also hides *Boot a live USB* (the ISO-file option), which lives under
+  that menu; booting a drive from the **Boot** screen is unaffected.
+  `/boot/nightfall-backup` (`1`/`0`) overrides it either way.
 - **Root and `/boot` on the same filesystem**, with `/boot/grub/grub.cfg`
   present, and that filesystem must be **ext4** for now.
 - **GRUB** as the bootloader: installation adds an entry to
@@ -328,6 +334,7 @@ on a keyboardless tablet means a tool with a GUI rather than an editor.
 | `/boot/nightfall-autorotate` | `1`/`on` or `0`/`off` |
 | `/boot/nightfall-splash` | `1`/`on` or `0`/`off` — both boot screens |
 | `/boot/nightfall-splash-ms` | shortest time they stay up, `0`–`10000` ms |
+| `/boot/nightfall-backup` | `1`/`on` or `0`/`off` — the Back up / Restore menu row. Default: shown on a Nocturne (the Slate), hidden on any other board |
 
 `nightfall-timeout` is validated hard, and it is the one where that matters:
 Nightfall treats `0` as *disable the auto-boot entirely*, so a stray newline or
@@ -388,6 +395,7 @@ logs (`display ready`, `splash drawn`, `touch ready`, `menu drawn`,
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `NIGHTFALL_ROTATE` | board-based (set by `init`): `270` on a Nocturne, `0` elsewhere | Panel rotation: 0/90/180/270 |
+| `NIGHTFALL_BACKUP` | board-based (set by `init`): `1` on a Nocturne, `0` elsewhere | Whether the Back up / Restore row is shown. Backup is a Slate feature and is hidden on general PCs; only the menu is gated (the scripts stay in the image). `/boot/nightfall-backup` beats this |
 | `NIGHTFALL_UI_SCALE` | computed from the screen | UI size in percent (25-300). Normally the short side of the display against the Slate's 2000px (the Slate is exactly 100; 1080p is 54; anything within 5% of the Slate snaps to it), which also picks the font (14/20/28/36/48px). Set it when a display's size is misjudged |
 | `NIGHTFALL_INPUT_GRACE_SECS` | `4` | Once a keyboard or mouse is found, how long to keep waiting for a touchscreen before going on without one |
 | `NIGHTFALL_TIMEOUT_SECS` | `30` | Auto-boot the first entry; `0` disables |

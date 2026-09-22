@@ -185,7 +185,7 @@ EOF
     ;;
     envdump) cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
-echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset} ENV_TIMEOUT=${NIGHTFALL_TIMEOUT_SECS:-unset} ENV_SPLASH=${NIGHTFALL_SPLASH:-unset} ENV_SPLASH_MS=${NIGHTFALL_SPLASH_MIN_MS:-unset} ENV_KEXEC=${NIGHTFALL_KEXEC_BLOCKED:-unset}" >&2
+echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset} ENV_TIMEOUT=${NIGHTFALL_TIMEOUT_SECS:-unset} ENV_SPLASH=${NIGHTFALL_SPLASH:-unset} ENV_SPLASH_MS=${NIGHTFALL_SPLASH_MIN_MS:-unset} ENV_KEXEC=${NIGHTFALL_KEXEC_BLOCKED:-unset} ENV_BACKUP=${NIGHTFALL_BACKUP:-unset}" >&2
 echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
 echo 'SELECTED_INITRD=/boot/initrd.img-chosen'
 echo 'SELECTED_CMDLINE=ro quiet'
@@ -952,6 +952,31 @@ nfe | grep -q "ENV_KEXEC=unset" && both | grep -q "MARKER_KEXEC" \
 setup env envdump 0 0; pf 'exit 1'; run
 nfe | grep -q "ENV_KEXEC=unset" && both | grep -q "MARKER_KEXEC" \
   && ok "blocked with NO reason given is ignored - never refuse to boot with nothing to say" || bad "empty-reason block honoured: $(both | tail -3)"
+
+echo "=== 25. Back up / Restore is shown on the Slate and hidden elsewhere ==="
+# A Slate feature (Bob: not wanted on a general PC). Same fail-safe as the
+# rotation default: an unreadable board name keeps it, so a missing sysfs file
+# can never take a feature away from the machine it was built for.
+setup env envdump 0 0; dmi 'Nocturne\n'; run
+nfe | grep -q "ENV_BACKUP=1" && ok "a Nocturne shows the backup menu" || bad "Nocturne: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'PRIME Z390-A\n'; run
+nfe | grep -q "ENV_BACKUP=0" && ok "a desktop board hides it" || bad "desktop: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi '\n'; run
+nfe | grep -q "ENV_BACKUP=0" && ok "an empty-but-readable board name (some VMs) hides it too" || bad "empty: $(nfe | grep ENV_)"
+setup env envdump 0 0; run
+nfe | grep -q "ENV_BACKUP=1" && ok "an UNREADABLE board name keeps it - fail-safe for the Slate" || bad "unreadable: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'Nocturne'; run
+nfe | grep -q "ENV_BACKUP=1" && ok "a newline-less board name is still recognised" || bad "no-newline: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'PRIME Z390-A\n'; printf '1\n' > "$SB/mnt/root/boot/nightfall-backup"; run
+nfe | grep -q "ENV_BACKUP=1" && ok "/boot/nightfall-backup can turn it ON for a general PC" || bad "file on: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'Nocturne\n'; printf 'off' > "$SB/mnt/root/boot/nightfall-backup"; run
+nfe | grep -q "ENV_BACKUP=0" && ok "and OFF for a Slate - and a newline-less file still reads (the read() gotcha)" || bad "file off: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'PRIME Z390-A\n'; printf 'maybe\n' > "$SB/mnt/root/boot/nightfall-backup"; run
+nfe | grep -q "ENV_BACKUP=0" && both | grep -q "ignoring .*nightfall-backup" && ok "garbage in the file is ignored, with a warning, and the board default applies" || bad "garbage: $(nfe | grep ENV_) / $(both | grep -i nightfall-backup)"
+setup env envdump 0 0; dmi 'PRIME Z390-A\n'; NIGHTFALL_BACKUP=1 run
+nfe | grep -q "ENV_BACKUP=1" && ok "NIGHTFALL_BACKUP on the kernel command line beats the board" || bad "cmdline: $(nfe | grep ENV_)"
+setup env envdump 0 0; dmi 'PRIME Z390-A\n'; NIGHTFALL_BACKUP=1 run; printf '0' > "$SB/mnt/root/boot/nightfall-backup"; run
+nfe | grep -q "ENV_BACKUP=0" && ok "and the file beats the command line" || bad "file vs cmdline: $(nfe | grep ENV_)"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"
