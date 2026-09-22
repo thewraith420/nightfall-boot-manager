@@ -227,10 +227,23 @@ it is not supported yet.
   This also hides *Boot a live USB* (the ISO-file option), which lives under
   that menu; booting a drive from the **Boot** screen is unaffected.
   `/boot/nightfall-backup` (`1`/`0`) overrides it either way.
-- **Root and `/boot` on the same filesystem**, with `/boot/grub/grub.cfg`
-  present, and that filesystem must be **ext4** for now.
-- **GRUB** as the bootloader: installation adds an entry to
-  `/boot/grub/custom.cfg`.
+- **A root Nightfall can find and read.** `find-real-root.sh` walks every
+  partition looking for the one stamped with this exact build, recognising
+  **ext4, xfs, btrfs or f2fs** from the superblock (each mounted read-only
+  with the option that stops its own journal/log replay - never a bare,
+  type-agnostic mount). `/boot` may be its own separate partition; when it
+  is, Install/Remove/Repair are hidden, since those need a full Linux
+  install to `chroot` into, not just a boot partition.
+- **GRUB** as the bootloader, one of:
+  - `/boot/grub/grub.cfg` with `menuentry` stanzas (Debian, Ubuntu, Arch,
+    the Slate) - tried first;
+  - `/boot/grub2/grub.cfg` (Fedora, RHEL, openSUSE);
+  - Boot Loader Specification entries under `loader/entries/*.conf`, which
+    is what those same distros actually use when `grub.cfg` itself has
+    nothing but a `blscfg` command (`discover-bls.sh`).
+
+  Installation (adding a kernel from here) still only writes a GRUB
+  `custom.cfg` entry; BLS entries are read, not written.
 - **A way to steer**: a touchscreen, a keyboard, or a mouse (a QEMU
   `usb-tablet` also works, as an absolute pointer). See *Keyboard and mouse*
   below. With none of these Nightfall cannot show a menu, exits, and init
@@ -411,7 +424,7 @@ logs (`display ready`, `splash drawn`, `touch ready`, `menu drawn`,
 | `NIGHTFALL_VERBOSE` | unset | `1` puts `init`'s routine progress back on screen (it always goes to the boot log) |
 | `NIGHTFALL_SPLASH` | on | `0`/`off` turns off both boot screens: the spinner before the menu and the booting screen |
 | `NIGHTFALL_SPLASH_MIN_MS` | `1500` | Shortest time the splash and the booting screen stay up; `0` disables the floor |
-| `REAL_ROOT_DEV` | `/dev/mmcblk0p2` | Partition holding `/boot/grub/grub.cfg` |
+| `REAL_ROOT_DEV` | self-discovered | Overrides `find-real-root.sh`: pins the partition holding the boot files instead of searching for this build's stamped id |
 
 ## Testing
 
@@ -452,8 +465,9 @@ bash initramfs/test-boot-live-iso.sh   # kexec -l before any unmount, everything
 cd ui && make test
 ```
 
-Roughly 626 assertions (444 shell, 182 headless LVGL), all of which also pass
-on the Slate itself — which
+Several hundred assertions across the shell and headless-LVGL suites (an
+exact count goes stale after every change that adds one - don't trust a
+number here, run the suites), all of which also pass on the Slate itself — which
 matters more than it sounds: Ubuntu builds busybox with
 `FEATURE_SH_STANDALONE`, so applets resolve from busybox's own table before
 `PATH` is consulted and a `PATH` mock is silently bypassed. Debian's build is

@@ -9,7 +9,8 @@ on selection.
 `test-rename-backup.sh`, `test-remove-kernel.sh`, `test-fsck-root.sh`,
 `test-repair.sh`, `test-cmdline.sh`, `test-discover-kernels.sh`,
 `test-discover-live-isos.sh`, `test-boot-live-iso.sh`,
-`test-discover-bootable-drives.sh`, `test-boot-external-drive.sh`):
+`test-discover-bootable-drives.sh`, `test-boot-external-drive.sh`,
+`test-find-real-root.sh`, `test-discover-bls.sh`):
 
 - **Backups**: `backup-system.sh` (tar via the target's own GNU tar, source
   stays read-only), `restore-system.sh` (extracts over, never wipes),
@@ -18,7 +19,9 @@ on selection.
 - **Repair**: `fsck-root.sh` (unmounts the root, so `e2fsck` can actually
   repair), `repair-system.sh` (`dpkg`/`clean`/`grub`), `clear-overrides.sh`.
 - **Kernels**: `install-kernel.sh`, `remove-kernel.sh`, `discover-kernels.sh`,
-  `discover-tarballs.sh`, `apply-default.sh`, `apply-cmdline.sh`.
+  `discover-bls.sh`, `discover-tarballs.sh`, `apply-default.sh`,
+  `apply-cmdline.sh`.
+- **Finding the real root**: `find-real-root.sh` - see below.
 - **Boot an external drive** (the primary answer - see below for why):
   `discover-bootable-drives.sh` (looks for the UEFI removable-media
   fallback loader, `\EFI\BOOT\BOOTX64.EFI`, on each external drive's
@@ -41,13 +44,17 @@ on selection.
   hardware - see the driver table below. Everything here is tested against
   mocked `mount`/`losetup`/`kexec`; nothing has touched a real ISO yet.
 
-- `init` - PID 1: mounts `/proc` `/sys` `/dev`, mounts the real root
-  partition (`/dev/mmcblk0p2`, ext4 - confirmed on hardware, no separate
-  `/boot` mount, no LABEL) read-only, runs discovery against
-  `/boot/grub/grub.cfg` on it, runs the UI, hands the selection to
-  `boot-integration/kexec-boot.sh`. Has a real fallback chain, not just
-  the happy path: if the root mount or `discover-kernels.sh` fails (or
-  finds zero entries), drops to a rescue shell (`exec /bin/sh`) instead
+- `init` - PID 1: mounts `/proc` `/sys` `/dev`, finds its own real root with
+  `find-real-root.sh` (self-discovery by stamped build id, confirmed on
+  hardware - the Slate's internal eMMC has no LABEL either), mounts it
+  read-only, runs discovery against `$BOOTDIR/grub/grub.cfg`,
+  `$BOOTDIR/grub2/grub.cfg` or Boot Loader Specification entries
+  (`discover-bls.sh`) - `$BOOTDIR` is the root itself when `/boot` is a
+  separate partition (`find-real-root.sh`'s "bootfs" layout) - runs the
+  UI, hands the selection to `boot-integration/kexec-boot.sh`. Has a real
+  fallback chain, not just the happy path: if the root mount or discovery
+  fails (or finds zero entries from any of the three sources), drops to
+  a rescue shell (`exec /bin/sh`) instead
   of continuing with nothing to boot; if `picker` itself fails or
   produces no usable selection (no touch device, no DRM output, a
   crash), falls back to the first discovered kernel instead - same
@@ -138,6 +145,26 @@ on selection.
   non-kernel entries) and excluding the picker's own entry (`--id
   picker`). Verified against the real grub.cfg pulled from the Slate -
   correctly extracts all 25 real kernel entries.
+- `discover-bls.sh` - the same `title\tlinux\tinitrd\tcmdline` list, read
+  from Boot Loader Specification entries (`loader/entries/*.conf`) instead
+  of a grub.cfg. Fedora/RHEL/openSUSE leave grub.cfg with only a `blscfg`
+  command and no menuentries at all, so `discover-kernels.sh` parsing it
+  finds nothing there - this is what `init` falls through to instead of
+  going straight to rescue. Resolves `$kernelopts` from grubenv when
+  present, drops other whole-token GRUB variables (same rule as
+  `discover-kernels.sh`), takes an entry's first `initrd` line only, and
+  sorts newest-version-first with a real version compare (no plain string
+  sort, so 6.10 correctly comes after 6.9).
+- `find-real-root.sh` - walks every partition looking for the one stamped
+  with this exact initramfs build (see *Root self-discovery* in the top
+  README), recognising ext4/xfs/btrfs/f2fs from the superblock magic and
+  mounting each with the option that stops its own journal/log replay.
+  Reports `<device> <layout>`: `rootfs` when the found partition is the
+  real root (the historical case - `boot/nightfall/build-id`, `/boot` a
+  directory on it), `bootfs` when it IS a separate `/boot` partition
+  (`nightfall/build-id` at the top level). `init` uses the layout to set
+  `BOOTDIR` and, on `bootfs`, `NIGHTFALL_BOOT_ONLY=1` so the UI hides
+  Install/Remove/Repair (they need a full Linux install to `chroot` into).
 - `apply-default.sh` - reorders `discover-kernels.sh`'s output so a
   previously "Set Default"-marked entry (see `ui/README.md`) is moved
   to the front, if it's still present; a missing or stale marker just
