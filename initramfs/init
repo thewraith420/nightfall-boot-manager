@@ -25,6 +25,15 @@ mdev -s
 
 mkdir -p /run/nightfall /mnt/root
 
+# Where the boot files (grub.cfg, loader/entries, vmlinuz-*, and Nightfall's own
+# nightfall-* settings) live under /mnt/root. On every machine so far /boot is a
+# directory on the real root. When /boot is its own partition, find-real-root.sh
+# reports the layout "bootfs", /mnt/root IS the boot partition, and this is
+# switched to /mnt/root once it is mounted. Until then it names the usual place,
+# which does not exist yet - so "is the root mounted" checks still mean that.
+BOOTDIR=/mnt/root/boot
+BOOT_LAYOUT=rootfs
+
 # kexec-boot.sh correctly refuses to run with a missing linux path
 # (set -eu, ${2:?}) - but since it's exec'd below in place of PID 1,
 # that clean refusal becomes "Attempted to kill init!" instead of
@@ -48,7 +57,7 @@ mkdir -p /run/nightfall /mnt/root
 #
 # Strictly best-effort. Every step can fail and the boot continues -
 # diagnostics must never be the reason a machine doesn't come up.
-BOOT_LOG=/mnt/root/boot/nightfall-last-boot.log
+BOOT_LOG=""   # set in save_log(), once BOOTDIR is known
 stages=""
 # Two kinds of progress line, and only one belongs on the screen.
 #
@@ -139,10 +148,11 @@ wait_for() { _wait_glob=$2; wait_until "$1 ($2)" _have_wait_glob "$3"; }
 # mounted read-only, so this borrows the same brief remount dance
 # apply-default uses (see below) - and puts it back read-only after.
 save_log() {
-    [ -d /mnt/root/boot ] || {
+    [ -d "$BOOTDIR" ] || {
         echo "nightfall: (real root not mounted - cannot save a boot log)" >&2
         return 0
     }
+    BOOT_LOG=$BOOTDIR/nightfall-last-boot.log
     mount -o remount,rw /mnt/root 2>/dev/null || {
         echo "nightfall: (could not remount rw - cannot save a boot log)" >&2
         return 0
@@ -309,8 +319,15 @@ if [ -z "${REAL_ROOT_DEV:-}" ]; then
             sleep 1
         done
         if [ -n "$found" ]; then
-            REAL_ROOT_DEV=$found
-            stage "found it: $REAL_ROOT_DEV"
+            # "<device> <layout>". No set -- here: init has no use for its
+            # positional parameters, but clobbering them is a trap left for
+            # whoever adds one. A bare device (an older find-real-root.sh)
+            # has no space, so ${found#* } returns it unchanged - treated as
+            # the historical layout.
+            REAL_ROOT_DEV=${found%% *}
+            BOOT_LAYOUT=${found#* }
+            [ "$BOOT_LAYOUT" = "$found" ] && BOOT_LAYOUT=rootfs
+            stage "found it: $REAL_ROOT_DEV ($BOOT_LAYOUT)"
         else
             # NOT the hardcoded-eMMC fallback below - a build carrying an
             # id is explicitly one meant to roam (Bob's portable stick),
@@ -353,17 +370,48 @@ if ! mount -o ro "$REAL_ROOT_DEV" /mnt/root; then
     rescue "failed to mount real root ($REAL_ROOT_DEV)"
 fi
 
-stage "discovering kernels from grub.cfg"
-if ! /bin/discover-kernels.sh /mnt/root/boot/grub/grub.cfg > /run/nightfall/menu.tsv.raw || [ ! -s /run/nightfall/menu.tsv.raw ]; then
-    rescue "no kernel entries found (discover-kernels.sh failed, or grub.cfg missing/empty)"
+if [ "$BOOT_LAYOUT" = bootfs ]; then
+    # The partition we just mounted is /boot itself: there is no boot/ under it.
+    BOOTDIR=/mnt/root
+    # Kernel install/remove write $root/boot/..., which on a boot-only mount
+    # would create a stray boot/ directory on the wrong filesystem. The UI
+    # hides those rows on this.
+    NIGHTFALL_BOOT_ONLY=1
+    export NIGHTFALL_BOOT_ONLY
+    stage "/boot is its own partition: boot files are at the top of it"
+fi
+
+# Which kernels can be booted. Tried in order, first one to yield anything wins:
+#   1. $BOOTDIR/grub/grub.cfg    Debian, Ubuntu, Arch, the Slate - tried first
+#                                so nothing that worked before changes
+#   2. $BOOTDIR/grub2/grub.cfg   Fedora, RHEL, openSUSE
+#   3. $BOOTDIR/loader/entries   Boot Loader Specification: Fedora/RHEL put
+#                                their kernels here and leave grub.cfg with
+#                                only a blscfg command and no menuentries
+# Fills menu.tsv.raw; status is whether it is non-empty.
+discover_kernels() {
+    : > /run/nightfall/menu.tsv.raw
+    /bin/discover-kernels.sh "$BOOTDIR/grub/grub.cfg" > /run/nightfall/menu.tsv.raw 2>/dev/null || :
+    [ -s /run/nightfall/menu.tsv.raw ] && return 0
+    if [ -r "$BOOTDIR/grub2/grub.cfg" ]; then
+        /bin/discover-kernels.sh "$BOOTDIR/grub2/grub.cfg" > /run/nightfall/menu.tsv.raw 2>/dev/null || :
+        [ -s /run/nightfall/menu.tsv.raw ] && return 0
+    fi
+    /bin/discover-bls.sh "$BOOTDIR" > /run/nightfall/menu.tsv.raw 2>/dev/null || :
+    [ -s /run/nightfall/menu.tsv.raw ]
+}
+
+stage "discovering kernels (grub.cfg, grub2, boot loader entries)"
+if ! discover_kernels; then
+    rescue "no kernel entries found (no usable grub/grub.cfg, grub2/grub.cfg or loader/entries under ${BOOTDIR#/mnt/root}/)"
 fi
 
 # Moves a previously "Set Default"-marked entry to the front, if it's
 # still present - see apply-default.sh. A missing/stale marker just
 # passes the list through unchanged.
-DEFAULT_MARKER=/mnt/root/boot/nightfall-default
-CMDLINE_FILE=/mnt/root/boot/nightfall-cmdline
-TIMEOUT_FILE=/mnt/root/boot/nightfall-timeout
+DEFAULT_MARKER=$BOOTDIR/nightfall-default
+CMDLINE_FILE=$BOOTDIR/nightfall-cmdline
+TIMEOUT_FILE=$BOOTDIR/nightfall-timeout
 
 # The menu timeout, settable without rebuilding the initramfs.
 #
@@ -464,8 +512,8 @@ default_cmdline=$(printf '%s' "$default_line" | cut -f4)
 # wrong orientation is sideways but still usable, since touch goes
 # through the same transform. Strict parsing and ignore-on-garbage is
 # enough. `read`, not `head | tr` - tr is not an applet in this image.
-ROTATE_FILE=/mnt/root/boot/nightfall-rotate
-AUTOROTATE_FILE=/mnt/root/boot/nightfall-autorotate
+ROTATE_FILE=$BOOTDIR/nightfall-rotate
+AUTOROTATE_FILE=$BOOTDIR/nightfall-autorotate
 if [ -f "$ROTATE_FILE" ]; then
     _r=""
     # `|| :`, not `|| _r=""` - see the build-id read above: a
@@ -501,8 +549,8 @@ fi
 # and how long they stay up. Same pattern as the settings above, for the
 # fixer's GUI. Cosmetic, so validated for correctness only: garbage is
 # ignored and Nightfall's defaults apply (screens on, 1500ms).
-SPLASH_FILE=/mnt/root/boot/nightfall-splash
-SPLASH_MS_FILE=/mnt/root/boot/nightfall-splash-ms
+SPLASH_FILE=$BOOTDIR/nightfall-splash
+SPLASH_MS_FILE=$BOOTDIR/nightfall-splash-ms
 if [ -f "$SPLASH_FILE" ]; then
     _s=""
     # `|| :`, not `|| _s=""` - see the build-id read above: a
@@ -579,7 +627,7 @@ export NIGHTFALL_ROTATE
 # specific first: /boot/nightfall-backup (1/on or 0/off), NIGHTFALL_BACKUP on
 # the kernel command line, then the board. Only the MENU is gated - the
 # scripts stay in the image and nothing else reads this.
-BACKUP_FILE=/mnt/root/boot/nightfall-backup
+BACKUP_FILE=$BOOTDIR/nightfall-backup
 if [ -f "$BACKUP_FILE" ]; then
     _bk=""
     # `|| :`, not `|| _bk=""` - see the build-id read above.
@@ -660,8 +708,7 @@ fi
 # rebuilt from it - otherwise the list still omits what was just added,
 # which looks exactly like the install having done nothing.
 refresh_menu() {
-    if /bin/discover-kernels.sh /mnt/root/boot/grub/grub.cfg > /run/nightfall/menu.tsv.raw \
-       && [ -s /run/nightfall/menu.tsv.raw ]; then
+    if discover_kernels; then
         build_menu_files
         default_line=$(head -n1 /run/nightfall/menu.tsv)
         default_linux=$(printf '%s' "$default_line" | cut -f2)

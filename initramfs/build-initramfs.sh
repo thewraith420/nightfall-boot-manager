@@ -82,6 +82,7 @@ for f in "$here/init" "$here/discover-kernels.sh" "$here/apply-default.sh" \
          "$here/discover-live-isos.sh" "$here/boot-live-iso.sh" \
          "$here/discover-bootable-drives.sh" "$here/boot-external-drive.sh" \
          "$here/find-real-root.sh" "$here/kexec-preflight.sh" \
+         "$here/discover-bls.sh" \
          "$repo/boot-integration/kexec-boot.sh"; do
     [ -r "$f" ] || die "missing source file: $f"
 done
@@ -135,6 +136,7 @@ install -m 0755 "$here/discover-bootable-drives.sh" "$staging/bin/discover-boota
 install -m 0755 "$here/boot-external-drive.sh"      "$staging/bin/boot-external-drive.sh"
 install -m 0755 "$here/find-real-root.sh"           "$staging/bin/find-real-root.sh"
 install -m 0755 "$here/kexec-preflight.sh"          "$staging/bin/kexec-preflight.sh"
+install -m 0755 "$here/discover-bls.sh"             "$staging/bin/discover-bls.sh"
 install -m 0755 "$repo/boot-integration/kexec-boot.sh" "$staging/sbin/kexec-boot.sh"
 
 # ------------------------------------------------------------ shared libraries

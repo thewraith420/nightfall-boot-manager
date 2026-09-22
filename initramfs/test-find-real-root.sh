@@ -37,6 +37,24 @@ plain_content() {
   : > "$SB/content-$1/some-file"
 }
 
+# A fake block device carrying just enough of a superblock to be recognised.
+# $1 = ext4|xfs|btrfs|f2fs|other  $2 = partition name (in $DEV)
+mkimg() {
+  local f="$DEV/$2"; : > "$f"
+  case "$1" in
+    ext4)  printf '\x53\xef'   | dd of="$f" bs=1 seek=1080  conv=notrunc 2>/dev/null ;;
+    xfs)   printf 'XFSB'        | dd of="$f" bs=1 seek=0     conv=notrunc 2>/dev/null ;;
+    btrfs) printf '_BHRfS_M'    | dd of="$f" bs=1 seek=65600 conv=notrunc 2>/dev/null ;;
+    f2fs)  printf '\x10\x20\xf5\xf2' | dd of="$f" bs=1 seek=1024 conv=notrunc 2>/dev/null ;;
+    other) printf 'NOT-A-LINUX-FS!!' | dd of="$f" bs=1 seek=0 conv=notrunc 2>/dev/null ;;
+  esac
+}
+# A partition that IS /boot: the marker sits at the top level, no boot/ dir.
+content_bootfs() {
+  mkdir -p "$SB/content-$1/nightfall"
+  printf '%s' "$2" > "$SB/content-$1/nightfall/build-id"
+}
+
 write_mount_mock() {
   cat > "$SB/bin/mount" <<EOF
 #!/bin/sh
@@ -66,7 +84,7 @@ content_with_id sda2 BUILD-ABC
 write_mount_mock
 out=$(run BUILD-ABC); rc=$?
 [ "$rc" = 0 ] && ok "exits 0" || bad "exit $rc"
-[ "$out" = "/dev/sda2" ] && ok "reports the matching partition" || bad "wrong device: $out"
+[ "$out" = "/dev/sda2 rootfs" ] && ok "reports the matching partition and that it is the real root" || bad "wrong device: $out"
 grep -qE '^MOUNT -t ext4 -o ro,noload ' "$SB/log" \
   && ok "mounts as ext4 with noload, never a bare -o ro (a dirty journal would still get replayed - a write - under plain ro)" \
   || bad "did not mount with -t ext4 -o ro,noload: $(grep MOUNT "$SB/log")"
@@ -133,7 +151,67 @@ plain_content sda1
 content_with_id sdb1 BUILD-ABC
 write_mount_mock
 out=$(run BUILD-ABC)
-[ "$out" = "/dev/sdb1" ] && ok "finds it even when it's on a later disk" || bad "wrong device: $out"
+[ "$out" = "/dev/sdb1 rootfs" ] && ok "finds it even when it's on a later disk" || bad "wrong device: $out"
+teardown
+
+echo "=== each filesystem gets ITS OWN option that stops journal/log replay ==="
+for spec in "ext4:ro,noload" "xfs:ro,norecovery" "btrfs:ro,rescue=nologreplay" "f2fs:ro,norecovery"; do
+  fs=${spec%%:*}; opts=${spec#*:}
+  setup
+  add_disk sda sda1
+  mkimg "$fs" sda1
+  content_with_id sda1 BUILD-ABC
+  write_mount_mock
+  out=$(run BUILD-ABC)
+  [ "$out" = "/dev/sda1 rootfs" ] && ok "$fs is recognised from its superblock and found" || bad "$fs not found: [$out]"
+  grep -q "^MOUNT -t $fs -o $opts " "$SB/log" && ok "$fs is mounted -t $fs -o $opts" || bad "$fs mounted wrongly: $(grep MOUNT "$SB/log")"
+  grep -qE '^MOUNT -o ro ' "$SB/log" && bad "$fs: a plain type-agnostic mount happened" || ok "$fs: never a plain -o ro"
+  teardown
+done
+
+echo "=== an unrecognised filesystem is never mounted at all ==="
+setup
+add_disk sda sda1
+mkimg other sda1
+content_with_id sda1 BUILD-ABC
+write_mount_mock
+out=$(run BUILD-ABC); rc=$?
+[ "$rc" != 0 ] && [ -z "$out" ] && ok "a vfat/swap/ntfs/anything-else partition is skipped" || bad "matched something unrecognised: rc=$rc out=$out"
+[ -s "$SB/log" ] && bad "it was MOUNTED anyway: $(cat "$SB/log")" || ok "and it was never mounted - sniffed, not tried"
+teardown
+
+echo "=== an unreadable/empty device keeps the historical ext4 attempt ==="
+setup
+add_disk sda sda1
+: > "$DEV/sda1"
+content_with_id sda1 BUILD-ABC
+write_mount_mock
+out=$(run BUILD-ABC)
+[ "$out" = "/dev/sda1 rootfs" ] && grep -q "^MOUNT -t ext4 -o ro,noload " "$SB/log" \
+  && ok "when nothing can be sniffed it still tries ext4,noload - the Slate is never left behind by a misbehaving od" || bad "legacy fallback lost: [$out] $(cat "$SB/log")"
+teardown
+
+echo "=== a separate /boot partition is found, and reported as such ==="
+setup
+add_disk sda sda1 sda2
+mkimg ext4 sda1; mkimg ext4 sda2
+plain_content sda1
+content_bootfs sda2 BUILD-ABC
+write_mount_mock
+out=$(run BUILD-ABC)
+[ "$out" = "/dev/sda2 bootfs" ] && ok "the partition whose marker is at the top level is the /boot partition" || bad "bootfs not found: [$out]"
+teardown
+
+echo "=== the real root wins when both layouts exist on one partition ==="
+setup
+add_disk sda sda1
+mkimg ext4 sda1
+mkdir -p "$SB/content-sda1/boot/nightfall" "$SB/content-sda1/nightfall"
+printf 'BUILD-ABC' > "$SB/content-sda1/boot/nightfall/build-id"
+printf 'BUILD-ABC' > "$SB/content-sda1/nightfall/build-id"
+write_mount_mock
+out=$(run BUILD-ABC)
+[ "$out" = "/dev/sda1 rootfs" ] && ok "boot/nightfall is checked first" || bad "wrong layout: [$out]"
 teardown
 
 echo

@@ -185,7 +185,7 @@ EOF
     ;;
     envdump) cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
-echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset} ENV_TIMEOUT=${NIGHTFALL_TIMEOUT_SECS:-unset} ENV_SPLASH=${NIGHTFALL_SPLASH:-unset} ENV_SPLASH_MS=${NIGHTFALL_SPLASH_MIN_MS:-unset} ENV_KEXEC=${NIGHTFALL_KEXEC_BLOCKED:-unset} ENV_BACKUP=${NIGHTFALL_BACKUP:-unset}" >&2
+echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset} ENV_TIMEOUT=${NIGHTFALL_TIMEOUT_SECS:-unset} ENV_SPLASH=${NIGHTFALL_SPLASH:-unset} ENV_SPLASH_MS=${NIGHTFALL_SPLASH_MIN_MS:-unset} ENV_KEXEC=${NIGHTFALL_KEXEC_BLOCKED:-unset} ENV_BACKUP=${NIGHTFALL_BACKUP:-unset} ENV_BOOTONLY=${NIGHTFALL_BOOT_ONLY:-unset}" >&2
 echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
 echo 'SELECTED_INITRD=/boot/initrd.img-chosen'
 echo 'SELECTED_CMDLINE=ro quiet'
@@ -611,9 +611,9 @@ echo "=== 15. routine progress stays off the screen; problems do not ==="
 # the boot log. Warnings, the fallback banner and install messages must
 # still reach the screen - quiet must never hide a problem.
 setup quiet ok 0 0; run
-both | grep -q "discovering kernels from grub.cfg" && bad "routine progress still printed on screen" \
+both | grep -q "discovering kernels (grub.cfg, grub2, boot loader entries)" && bad "routine progress still printed on screen" \
   || ok "routine progress is not printed to the screen"
-log | grep -q "discovering kernels from grub.cfg" && ok "but it is still recorded in the boot log" \
+log | grep -q "discovering kernels (grub.cfg, grub2, boot loader entries)" && ok "but it is still recorded in the boot log" \
   || bad "routine progress dropped from the boot log too"
 both | grep -q "kexec into" && bad "the handoff to the kernel still prints" || ok "the handoff to the kernel prints nothing"
 
@@ -622,7 +622,7 @@ both | grep -q "ignoring .*nightfall-rotate" && ok "an ignored setting is still 
   || bad "a warning was silenced"
 
 setup quiet ok 0 0; NIGHTFALL_VERBOSE=1 run
-both | grep -q "discovering kernels from grub.cfg" && ok "NIGHTFALL_VERBOSE=1 puts routine progress back on screen" \
+both | grep -q "discovering kernels (grub.cfg, grub2, boot loader entries)" && ok "NIGHTFALL_VERBOSE=1 puts routine progress back on screen" \
   || bad "NIGHTFALL_VERBOSE did nothing"
 
 echo "=== 16. the booting screen is held through a boot, and released for a fallback ==="
@@ -646,7 +646,7 @@ both | grep -q "the menu could not be shown" && ok "the fallback banner is still
 
 echo "=== 17. boot-log lines carry seconds since boot ==="
 setup ts ok 0 0; run
-log | grep -qE '^  - \[[0-9]+\.[0-9]+\] discovering kernels from grub.cfg' \
+log | grep -qE '^  - \[[0-9]+\.[0-9]+\] discovering kernels' \
   && ok "each stage is timestamped from /proc/uptime" || bad "no timestamps: $(log | grep discovering)"
 
 echo "=== 18. boot screens on/off and their duration are settable from /boot ==="
@@ -977,6 +977,89 @@ setup env envdump 0 0; dmi 'PRIME Z390-A\n'; NIGHTFALL_BACKUP=1 run
 nfe | grep -q "ENV_BACKUP=1" && ok "NIGHTFALL_BACKUP on the kernel command line beats the board" || bad "cmdline: $(nfe | grep ENV_)"
 setup env envdump 0 0; dmi 'PRIME Z390-A\n'; NIGHTFALL_BACKUP=1 run; printf '0' > "$SB/mnt/root/boot/nightfall-backup"; run
 nfe | grep -q "ENV_BACKUP=0" && ok "and the file beats the command line" || bad "file vs cmdline: $(nfe | grep ENV_)"
+
+echo "=== 26. separate /boot, grub2 and boot-loader-spec discovery ==="
+# The mocks below record every path discovery is pointed at, so the ORDER it
+# tries things in - and where it looks - is asserted, not just the outcome.
+# $1 = which candidate yields kernels: grubok | grub2ok | blsok | nothing
+kernel_mocks() {
+  cat > "$SB/bin/discover-kernels.sh" <<MOCK
+#!/bin/sh
+echo "\$1" >> "$SB/dk-args"
+case "\$1" in
+  *grub/grub.cfg)  [ "$1" = grubok ]  || exit 1 ;;
+  *grub2/grub.cfg) [ "$1" = grub2ok ] || exit 1 ;;
+esac
+printf 'Distro\t/boot/vmlinuz-real\t/boot/initrd.img-real\tro quiet\t\n'
+MOCK
+  cat > "$SB/bin/discover-bls.sh" <<MOCK
+#!/bin/sh
+echo "\$1" >> "$SB/bls-args"
+[ "$1" = blsok ] || exit 1
+printf 'Fedora\t/vmlinuz-bls\t/initramfs-bls.img\tro quiet\t\n'
+MOCK
+  chmod +x "$SB/bin/discover-kernels.sh" "$SB/bin/discover-bls.sh"
+}
+# grub2/grub.cfg only counts when it exists and is readable.
+grub2_present() { mkdir -p "$SB/mnt/root/boot/grub2"; : > "$SB/mnt/root/boot/grub2/grub.cfg"; }
+dkargs() { tr '\n' ' ' < "$SB/dk-args"; }
+
+setup happy ok 0 0; kernel_mocks grubok; run
+[ "$(dkargs)" = "$SB/mnt/root/boot/grub/grub.cfg " ] \
+  && ok "grub/grub.cfg is tried first, and is enough when it yields" || bad "args: $(dkargs)"
+[ -e "$SB/bls-args" ] && bad "asked for BLS entries although grub.cfg already had kernels" || ok "and BLS is never consulted then"
+
+setup happy ok 0 0; grub2_present; kernel_mocks grub2ok; run
+[ "$(dkargs)" = "$SB/mnt/root/boot/grub/grub.cfg $SB/mnt/root/boot/grub2/grub.cfg " ] \
+  && ok "falls through to grub2/grub.cfg (Fedora/openSUSE) when grub/ has nothing" || bad "args: $(dkargs)"
+[ -e "$SB/bls-args" ] && bad "asked for BLS entries although grub2/grub.cfg already had kernels - BLS must be the LAST resort, tried after grub2" || ok "and BLS is never consulted then either"
+both | grep -q "MARKER_KEXEC" && ok "and boots" || bad "did not boot"
+
+setup happy ok 0 0; kernel_mocks blsok; run
+[ "$(dkargs)" = "$SB/mnt/root/boot/grub/grub.cfg " ] \
+  && ok "a missing grub2/grub.cfg is not even attempted" || bad "args: $(dkargs)"
+[ "$(cat "$SB/bls-args" 2>/dev/null)" = "$SB/mnt/root/boot" ] \
+  && ok "then boot-loader-spec entries are read from the boot directory" || bad "bls arg: $(cat "$SB/bls-args" 2>/dev/null)"
+both | grep -q "MARKER_KEXEC" && ok "and boots from them" || bad "did not boot from BLS"
+
+setup happy ok 0 0; grub2_present; kernel_mocks nothing; run
+both | grep -q "MARKER_RESCUE_SHELL_REACHED" && ok "no kernels from ANY source still goes to rescue" || bad "did not reach rescue"
+both | grep -q "no usable grub/grub.cfg, grub2/grub.cfg or loader/entries" && ok "and the message names everything that was tried" || bad "message: $(both | grep -i 'no kernel')"
+
+echo "=== a separate /boot partition: the boot files are at the top of it ==="
+# $1 = the layout word the finder reports ("" = a bare device, like an older finder)
+finder_reporting() {
+  : > "$SB/dev/discovered-root"
+  mkdir -p "$SB/etc"; echo "BUILD-XYZ" > "$SB/etc/nightfall-build-id"
+  cat > "$SB/bin/find-real-root.sh" <<MOCK
+#!/bin/sh
+echo "$SB/dev/discovered-root${1:+ $1}"
+exit 0
+MOCK
+  chmod +x "$SB/bin/find-real-root.sh"
+}
+setup env envdump 0 0; finder_reporting bootfs; kernel_mocks grubok
+# setup pre-creates boot/ for the usual layout; a boot partition has none.
+rmdir "$SB/mnt/root/boot"; printf '90\n' > "$SB/mnt/root/nightfall-rotate"
+run_selfdiscover
+[ "$(head -n1 "$SB/dk-args")" = "$SB/mnt/root/grub/grub.cfg" ] \
+  && ok "discovery looks at <root>/grub/grub.cfg, with no boot/ in between" || bad "arg: $(head -n1 "$SB/dk-args")"
+nfe | grep -q "ENV_ROTATE=90" && ok "Nightfall's own settings are read from the top of the boot partition" || bad "settings not read: $(nfe | grep ENV_)"
+nfe | grep -q "ENV_BOOTONLY=1" && ok "and the UI is told it is looking at a boot-only mount" || bad "no boot-only flag: $(nfe | grep ENV_)"
+bl=$SB/mnt/root/nightfall-last-boot.log
+grep -qF "found it: $SB/dev/discovered-root (bootfs)" "$bl" 2>/dev/null && ok "the boot log is written at the top of the boot partition and names the layout" || bad "log: $(cat "$bl" 2>/dev/null | grep 'found it')"
+[ -e "$SB/mnt/root/boot" ] && bad "a stray boot/ appeared on the boot partition" || ok "nothing invents a boot/ directory on it"
+
+setup env envdump 0 0; finder_reporting rootfs; kernel_mocks grubok
+run_selfdiscover
+[ "$(head -n1 "$SB/dk-args")" = "$SB/mnt/root/boot/grub/grub.cfg" ] \
+  && ok "the rootfs layout keeps looking under boot/" || bad "arg: $(head -n1 "$SB/dk-args")"
+nfe | grep -q "ENV_BOOTONLY=unset" && ok "and does NOT claim to be boot-only" || bad "flag leaked: $(nfe | grep ENV_)"
+
+setup env envdump 0 0; finder_reporting ""; kernel_mocks grubok
+run_selfdiscover
+nfe | grep -q "ENV_BOOTONLY=unset" && [ "$(head -n1 "$SB/dk-args")" = "$SB/mnt/root/boot/grub/grub.cfg" ] \
+  && ok "a bare device with no layout word (an older finder) means the usual layout" || bad "bare device mishandled: $(nfe | grep ENV_)"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"
