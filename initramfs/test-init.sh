@@ -185,7 +185,7 @@ EOF
     ;;
     envdump) cat > "$SB/bin/nightfall" <<'EOF'
 #!/bin/sh
-echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset} ENV_TIMEOUT=${NIGHTFALL_TIMEOUT_SECS:-unset} ENV_SPLASH=${NIGHTFALL_SPLASH:-unset} ENV_SPLASH_MS=${NIGHTFALL_SPLASH_MIN_MS:-unset}" >&2
+echo "ENV_ROTATE=${NIGHTFALL_ROTATE:-unset} ENV_AUTO=${NIGHTFALL_AUTOROTATE:-unset} ENV_TIMEOUT=${NIGHTFALL_TIMEOUT_SECS:-unset} ENV_SPLASH=${NIGHTFALL_SPLASH:-unset} ENV_SPLASH_MS=${NIGHTFALL_SPLASH_MIN_MS:-unset} ENV_KEXEC=${NIGHTFALL_KEXEC_BLOCKED:-unset}" >&2
 echo 'SELECTED_LINUX=/boot/vmlinuz-chosen'
 echo 'SELECTED_INITRD=/boot/initrd.img-chosen'
 echo 'SELECTED_CMDLINE=ro quiet'
@@ -291,6 +291,8 @@ n=$(cat "$SB/fr-calls" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$SB/fr-c
 echo "MARKER_FIND_REAL_ROOT_CALLED $n id=$1" >&2
 exit 1
 EOF
+  # Says "fine" by default; the lockdown tests override it.
+  printf '#!/bin/sh\nexit 0\n' > "$SB/bin/kexec-preflight.sh"
   chmod +x "$SB"/bin/* "$SB"/sbin/*
 
   # Applet dir for BUSYBOX mode. Placed AFTER $SB/bin in PATH so the
@@ -920,6 +922,36 @@ setup env envdump 0 0; dmi 'PRIME Z390-A\n'; NIGHTFALL_ROTATE=180 run
 nfe | grep -q "ENV_ROTATE=180 " && ok "and so does NIGHTFALL_ROTATE from the kernel command line" || bad "cmdline overridden: $(nfe | grep ENV_)"
 setup env envdump 0 0; dmi 'PRIME Z390-A\n'; run
 log | grep -q "rotation 0 (default: board is 'PRIME Z390-A'" && ok "and the boot log says which board decided it" || bad "no trace in the log: $(log | grep -i rotation)"
+
+echo "=== 24. kexec blocked by lockdown: said up front, never a panic ==="
+# init exec()s kexec-boot.sh in place of PID 1, so a lockdown refusal at
+# `kexec -l` used to end in "Attempted to kill init!" with nothing on screen.
+pf() { printf '#!/bin/sh\n%s\n' "$1" > "$SB/bin/kexec-preflight.sh"; chmod +x "$SB/bin/kexec-preflight.sh"; }
+setup env envdump 0 0
+pf "echo \"kernel lockdown is 'integrity', which refuses kexec. Turn Secure Boot off.\"; exit 1"
+run
+nfe | grep -q "ENV_KEXEC=kernel lockdown is 'integrity'" \
+  && ok "the reason reaches Nightfall, so the UI can explain instead of offering a boot that cannot work" || bad "not handed over: $(nfe | grep ENV_)"
+both | grep -q "MARKER_KEXEC" && bad "exec'd kexec-boot.sh under lockdown - that is the panic" || ok "does NOT exec kexec-boot.sh"
+both | grep -q "MARKER_RESCUE_SHELL_REACHED" && ok "drops to a rescue shell instead" || bad "no rescue: $(both | tail -4)"
+both | grep -q "kernel lockdown is 'integrity'" && ok "and says WHY on the console" || bad "silent: $(both | tail -4)"
+log | grep -q "cannot boot /boot/vmlinuz-chosen: kernel lockdown" && ok "and the boot log records it" || bad "log: $(log | grep -i 'rescue\|cannot boot')"
+
+setup env envdump 0 0; run
+nfe | grep -q "ENV_KEXEC=unset" && ok "not blocked: nothing is handed over" || bad "false alarm: $(nfe | grep ENV_)"
+both | grep -q "MARKER_KEXEC.*vmlinuz-chosen" && ok "and it boots normally" || bad "did not boot"
+
+setup env envdump 0 0; rm -f "$SB/bin/kexec-preflight.sh"; run
+nfe | grep -q "ENV_KEXEC=unset" && both | grep -q "MARKER_KEXEC" \
+  && ok "a MISSING preflight script (an image built before it existed) is never treated as blocked" || bad "old image broke: $(both | tail -3)"
+
+setup env envdump 0 0; pf 'echo boom; exit 2'; run
+nfe | grep -q "ENV_KEXEC=unset" && both | grep -q "MARKER_KEXEC" \
+  && ok "any exit status other than exactly 1 means cannot-tell, not blocked" || bad "crash treated as blocked: $(both | tail -3)"
+
+setup env envdump 0 0; pf 'exit 1'; run
+nfe | grep -q "ENV_KEXEC=unset" && both | grep -q "MARKER_KEXEC" \
+  && ok "blocked with NO reason given is ignored - never refuse to boot with nothing to say" || bad "empty-reason block honoured: $(both | tail -3)"
 
 echo
 echo "passed: $pass   failed: $fail  (${MODE_NAME:-dash + coreutils})"

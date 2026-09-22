@@ -16,6 +16,11 @@ mount -t devpts none /dev/pts
 mkdir -p /sys/firmware/efi/efivars 2>/dev/null
 mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
 
+# Needed for kexec-preflight.sh to read the lockdown state
+# (/sys/kernel/security/lockdown). Best-effort like the above: without it the
+# preflight just cannot tell, which it treats as "not blocked".
+mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
+
 mdev -s
 
 mkdir -p /run/nightfall /mnt/root
@@ -599,6 +604,23 @@ export NIGHTFALL_ROTATE
         : > /run/nightfall/bootable.tsv
     }
 
+# Under kernel lockdown the legacy kexec_load syscall is refused, and the
+# final handoff below exec()s kexec-boot.sh in place of PID 1 - so that
+# refusal used to end in a kernel panic with nothing on screen to say why.
+# Ask once, up front: the reason goes to the UI (which then explains instead
+# of offering a boot that cannot work) and guards the exec at the bottom.
+# Only an exit status of exactly 1 means blocked; a missing script (an image
+# built before this existed) or any other failure means "cannot tell", never
+# "blocked" - refusing to boot a machine that would have worked is worse.
+kexec_block=$(/bin/kexec-preflight.sh 2>/dev/null); _pf=$?
+if [ "$_pf" = 1 ] && [ -n "$kexec_block" ]; then
+    warn "kexec is blocked: $kexec_block"
+    NIGHTFALL_KEXEC_BLOCKED=$kexec_block
+    export NIGHTFALL_KEXEC_BLOCKED
+else
+    kexec_block=""
+fi
+
 # grub.cfg changes when a kernel is installed, so the menu has to be
 # rebuilt from it - otherwise the list still omits what was just added,
 # which looks exactly like the install having done nothing.
@@ -930,6 +952,12 @@ if [ -n "${nightfall_failed:-}" ]; then
     save_log "fell back: $nightfall_failed"
 else
     save_log "booted user selection"
+fi
+
+# exec()ing kexec-boot.sh under lockdown ends in "Attempted to kill init!" -
+# a rescue shell that says why is the only failure a person can act on.
+if [ -n "$kexec_block" ]; then
+    rescue "cannot boot $SELECTED_LINUX: $kexec_block"
 fi
 
 stage "kexec into $SELECTED_LINUX"

@@ -30,7 +30,8 @@ APPLETS="sh mount umount mkdir echo printf cut head awk cat ls
          sleep dmesg uname tail sync date wc grep
          tar chroot tee rm df mv
          reboot poweroff
-         losetup"
+         losetup
+         od"
 
 say() { echo "==> $*"; }
 die() { echo "build-initramfs: $*" >&2; exit 1; }
@@ -80,7 +81,7 @@ for f in "$here/init" "$here/discover-kernels.sh" "$here/apply-default.sh" \
          "$here/discover-backups.sh" "$here/scan-drives.sh" \
          "$here/discover-live-isos.sh" "$here/boot-live-iso.sh" \
          "$here/discover-bootable-drives.sh" "$here/boot-external-drive.sh" \
-         "$here/find-real-root.sh" \
+         "$here/find-real-root.sh" "$here/kexec-preflight.sh" \
          "$repo/boot-integration/kexec-boot.sh"; do
     [ -r "$f" ] || die "missing source file: $f"
 done
@@ -133,6 +134,7 @@ install -m 0755 "$here/boot-live-iso.sh"            "$staging/bin/boot-live-iso.
 install -m 0755 "$here/discover-bootable-drives.sh" "$staging/bin/discover-bootable-drives.sh"
 install -m 0755 "$here/boot-external-drive.sh"      "$staging/bin/boot-external-drive.sh"
 install -m 0755 "$here/find-real-root.sh"           "$staging/bin/find-real-root.sh"
+install -m 0755 "$here/kexec-preflight.sh"          "$staging/bin/kexec-preflight.sh"
 install -m 0755 "$repo/boot-integration/kexec-boot.sh" "$staging/sbin/kexec-boot.sh"
 
 # ------------------------------------------------------------ shared libraries

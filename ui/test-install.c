@@ -609,6 +609,98 @@ int main(void) {
         }
     }
 
+    /* --- kexec blocked by kernel lockdown: explained, never offered --- */
+    {
+        /* Helper: footer button count of the topmost dialog on layer_top. */
+        #define TOP_FOOTER_BTNS() ({ \
+            lv_obj_t *_top = lv_layer_top(); \
+            lv_obj_t *_bd  = lv_obj_get_child(_top, lv_obj_get_child_count(_top) - 1); \
+            lv_obj_t *_mb  = lv_obj_get_child(_bd, 0); \
+            (int)lv_obj_get_child_count(lv_msgbox_get_footer(_mb)); })
+
+        static struct entry ke[1] = {{ "Ubuntu", "/boot/vmlinuz-x", "/boot/initrd-x", "ro", 0 }};
+        g_entries = ke; g_entry_n = 1;
+
+        unsetenv("NIGHTFALL_KEXEC_BLOCKED");
+        ck(kexec_blocked_reason() == NULL, "not blocked when init did not say so");
+        setenv("NIGHTFALL_KEXEC_BLOCKED", "", 1);
+        ck(kexec_blocked_reason() == NULL, "an EMPTY value is not blocked either - never refuse with nothing to say");
+
+        lv_obj_clean(lv_layer_top());
+        unsetenv("NIGHTFALL_KEXEC_BLOCKED");
+        ck(kernel_row_tapped(0) == 1, "an unblocked tap opens the confirm dialog");
+        lv_obj_update_layout(lv_layer_top());
+        ck(TOP_FOOTER_BTNS() == 4, "and it is the four-button boot dialog");
+
+        lv_obj_clean(lv_layer_top());
+        setenv("NIGHTFALL_KEXEC_BLOCKED", "kernel lockdown is 'integrity', which refuses kexec.", 1);
+        ck(kernel_row_tapped(0) == 0, "a blocked tap does NOT open the boot dialog");
+        lv_obj_update_layout(lv_layer_top());
+        ck(TOP_FOOTER_BTNS() == 1, "it explains instead, with a single OK");
+
+        /* The explanation carries the reason and says what still works. */
+        {
+            lv_obj_t *top = lv_layer_top();
+            lv_obj_t *bd  = lv_obj_get_child(top, lv_obj_get_child_count(top) - 1);
+            lv_obj_t *mb  = lv_obj_get_child(bd, 0);
+            lv_obj_t *ct  = lv_msgbox_get_content(mb);
+            int has_reason = 0, has_still = 0;
+            for (uint32_t i = 0; i < lv_obj_get_child_count(ct); i++) {
+                lv_obj_t *c = lv_obj_get_child(ct, i);
+                if (!lv_obj_check_type(c, &lv_label_class)) continue;
+                const char *t = lv_label_get_text(c);
+                if (strstr(t, "lockdown is 'integrity'")) has_reason = 1;
+                if (strstr(t, "drive") && strstr(t, "still work")) has_still = 1;
+            }
+            ck(has_reason, "the notice carries init's reason verbatim");
+            ck(has_still, "and says booting a drive, backups and repairs still work");
+        }
+
+        /* A live-ISO boot is also a kexec, so it is refused the same way. */
+        {
+            static struct live_iso lis[1] = {{ "live.iso", "3.2G", "live.iso" }};
+            g_live_isos = lis; g_live_iso_n = 1;
+            lv_obj_clean(lv_layer_top());
+            ck(live_iso_tapped(0) == 0, "a blocked live-ISO tap is refused too");
+            lv_obj_update_layout(lv_layer_top());
+            ck(TOP_FOOTER_BTNS() == 1, "with the same single-OK explanation");
+            lv_obj_clean(lv_layer_top());
+            unsetenv("NIGHTFALL_KEXEC_BLOCKED");
+            ck(live_iso_tapped(0) == 1, "and opens the normal confirm when kexec works");
+            lv_obj_update_layout(lv_layer_top());
+            ck(TOP_FOOTER_BTNS() == 2, "which is the two-button Cancel/Boot dialog");
+            setenv("NIGHTFALL_KEXEC_BLOCKED", "kernel lockdown is 'integrity', which refuses kexec.", 1);
+            g_live_isos = NULL; g_live_iso_n = 0;
+        }
+
+        /* The Boot screen warns at the top. */
+        lv_obj_clean(lv_layer_top());
+        show_kernel_list();
+        {
+            int banner = 0;
+            for (uint32_t i = 0; i < lv_obj_get_child_count(g_list); i++) {
+                lv_obj_t *c = lv_obj_get_child(g_list, i);
+                if (lv_obj_check_type(c, &lv_label_class) &&
+                    strstr(lv_label_get_text(c), "cannot be booted from here")) banner = 1;
+            }
+            ck(banner, "the Boot screen shows a banner when kernels cannot be booted");
+        }
+        unsetenv("NIGHTFALL_KEXEC_BLOCKED");
+        show_kernel_list();
+        {
+            int banner = 0;
+            for (uint32_t i = 0; i < lv_obj_get_child_count(g_list); i++) {
+                lv_obj_t *c = lv_obj_get_child(g_list, i);
+                if (lv_obj_check_type(c, &lv_label_class) &&
+                    strstr(lv_label_get_text(c), "cannot be booted from here")) banner = 1;
+            }
+            ck(!banner, "and no banner at all when they can");
+        }
+        lv_obj_clean(lv_layer_top());
+        show_main_menu();
+        #undef TOP_FOOTER_BTNS
+    }
+
     printf("\npassed: %d  failed: %d\n", passes, fails);
     return fails ? 1 : 0;
 }

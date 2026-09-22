@@ -1094,6 +1094,45 @@ static void cancel_cb(lv_event_t *e) {
     lv_msgbox_close_async(lv_event_get_user_data(e));
 }
 
+/* ---------------- kexec blocked (kernel lockdown) ----------------
+ *
+ * Under kernel lockdown the legacy kexec_load syscall is refused, so no
+ * kernel can be booted from here - and init exec()s kexec-boot.sh in place
+ * of PID 1, so finding that out at the last moment used to end in a kernel
+ * panic with nothing on screen to say why. init asks kexec-preflight.sh
+ * once, up front, and hands the reason over in NIGHTFALL_KEXEC_BLOCKED
+ * (unset when kexec works or when it simply cannot tell). Only kexec paths
+ * are affected: booting a DRIVE goes through firmware, and backups and
+ * repairs never kexec, so those stay available and the message says so. */
+static const char *kexec_blocked_reason(void) {
+    const char *r = getenv("NIGHTFALL_KEXEC_BLOCKED");
+    return (r && *r) ? r : NULL;
+}
+
+/* A plain one-button explanation. */
+static void show_notice(const char *title, const char *body) {
+    lv_obj_t *m = lv_msgbox_create(NULL);
+    lv_obj_set_width(m, lv_pct(72));
+    lv_msgbox_add_title(m, title);
+    lv_msgbox_add_text(m, body);
+    lv_obj_t *b = lv_msgbox_add_footer_button(m, "OK");
+    lv_obj_set_height(lv_msgbox_get_footer(m), LV_SIZE_CONTENT);
+    lv_obj_set_height(lv_msgbox_get_header(m), LV_SIZE_CONTENT);
+    lv_obj_set_height(b, DIALOG_BTN_H);
+    lv_obj_set_width(b, lv_pct(100));
+    lv_obj_add_event_cb(b, cancel_cb, LV_EVENT_CLICKED, m);
+}
+
+static void show_kexec_blocked_notice(void) {
+    const char *why = kexec_blocked_reason();
+    if (!why) return;
+    char body[560];
+    snprintf(body, sizeof(body),
+             "%.400s\n\nBooting a drive from the Boot screen, backups and "
+             "repairs still work.", why);
+    show_notice("Can't boot a kernel from here", body);
+}
+
 /* Edit: GRUB-style one-time cmdline tweak, never persisted - just
  * mutates this entry's in-memory copy for the rest of this run, same
  * as GRUB's own 'e' edit-before-boot. */
@@ -1405,9 +1444,16 @@ static void open_confirm_dialog(int idx) {
     screenshot_soon("confirm-dialog");
 }
 
-static void row_click_cb(lv_event_t *e) {
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+/* The testable core of a kernel-row tap: 1 if the confirm dialog opened, 0
+ * if kexec is blocked and an explanation was shown instead. */
+static int kernel_row_tapped(int idx) {
+    if (kexec_blocked_reason()) { show_kexec_blocked_notice(); return 0; }
     open_confirm_dialog(idx);
+    return 1;
+}
+
+static void row_click_cb(lv_event_t *e) {
+    kernel_row_tapped((int)(intptr_t)lv_event_get_user_data(e));
 }
 
 static lv_obj_t *g_list;      /* the container the screens rebuild */
@@ -2809,8 +2855,10 @@ static void live_iso_go_cb(lv_event_t *e) {
     confirm_live_boot(idx);
 }
 
-static void live_iso_click_cb(lv_event_t *e) {
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+/* Testable core, same split as kernel_row_tapped(): 1 if the confirm opened,
+ * 0 if this kexec is refused under lockdown and a notice was shown instead. */
+static int live_iso_tapped(int idx) {
+    if (kexec_blocked_reason()) { show_kexec_blocked_notice(); return 0; }
     char body[400];
     snprintf(body, sizeof(body),
              "%.60s  (%.16s)\n\n"
@@ -2822,6 +2870,11 @@ static void live_iso_click_cb(lv_event_t *e) {
              g_live_isos[idx].name, g_live_isos[idx].size);
     simple_confirm(idx, "Boot this image?", body, "Boot", live_iso_go_cb, 0);
     screenshot_soon("boot-live-iso-dialog");
+    return 1;
+}
+
+static void live_iso_click_cb(lv_event_t *e) {
+    live_iso_tapped((int)(intptr_t)lv_event_get_user_data(e));
 }
 
 static void show_live_iso_list(void) {
@@ -2992,6 +3045,14 @@ static void show_kernel_list(void) {
     lv_obj_clean(g_list);
     lv_label_set_text(g_header, LV_SYMBOL_USB "  Boot");
     add_back_row(show_main_menu);
+
+    if (kexec_blocked_reason()) {
+        lv_obj_t *w = lv_label_create(g_list);
+        lv_label_set_long_mode(w, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(w, lv_pct(100));
+        lv_label_set_text_fmt(w, LV_SYMBOL_WARNING "  Kernels cannot be booted from here: %s", kexec_blocked_reason());
+        lv_obj_set_style_text_color(w, lv_color_hex(0xe6c07b), 0);
+    }
 
     /* Drives cannot be present at boot - see scan-drives.sh's own header -
      * so unlike the kernel list above, this can go stale the moment
@@ -3314,6 +3375,13 @@ int main(int argc, char **argv) {
     int timeout_secs = DEFAULT_TIMEOUT_SECS;
     const char *timeout_env = getenv("NIGHTFALL_TIMEOUT_SECS");
     if (timeout_env) timeout_secs = atoi(timeout_env);
+    /* An auto-boot that cannot work would only march into a rescue shell
+     * (see init) while someone is still reading why - stay on the menu,
+     * where booting a drive, restarting and backups still work. */
+    if (kexec_blocked_reason() && timeout_secs > 0) {
+        fprintf(stderr, "nightfall: kexec is blocked (%s) - auto-boot disabled\n", kexec_blocked_reason());
+        timeout_secs = 0;
+    }
 
     struct entry entries[MAX_ENTRIES];
     int n = load_entries(argv[1], entries, MAX_ENTRIES);

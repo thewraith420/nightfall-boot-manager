@@ -196,6 +196,37 @@ sudo ./install-nightfall.sh /path/to/vmlinuz-picker ../initramfs/nightfall-initr
 
 `install-nightfall.sh --uninstall` reverses it completely.
 
+### Requirements on a machine other than the Slate
+
+Nightfall started as a Slate-only tool and is being widened, so this is the
+honest list of what a different machine has to satisfy today. Anything not on
+it is not supported yet.
+
+- **Secure Boot must be OFF.** This is a decision, not an oversight: there is
+  no signing work planned. Two separate reasons: the Nightfall kernel is a
+  custom, unsigned build, so firmware/shim will not run it with Secure Boot
+  on; and even a kernel that does run under Secure Boot usually comes up in
+  kernel *lockdown*, which refuses the legacy `kexec_load` call Nightfall
+  boots kernels with. Turn Secure Boot off in the firmware settings.
+  Nightfall checks for the second case up front (`initramfs/kexec-preflight.sh`
+  reads `/sys/kernel/security/lockdown`): instead of failing at the last
+  moment, the Boot screen shows a warning banner, tapping a kernel explains
+  why it can't be booted, and the auto-boot countdown is disabled so the
+  message can be read. Only kexec is affected - booting a *drive*, backups and
+  repairs still work under lockdown. (Switching to `kexec -s`, which lockdown
+  permits for a signed kernel, is a possible later step; nothing needs to
+  change kernel-side for it.)
+- **Root and `/boot` on the same filesystem**, with `/boot/grub/grub.cfg`
+  present, and that filesystem must be **ext4** for now.
+- **GRUB** as the bootloader: installation adds an entry to
+  `/boot/grub/custom.cfg`.
+- **A touchscreen** (or a QEMU `usb-tablet`) - see the input note below; a
+  keyboard/mouse UI is being added.
+
+The screen's default rotation now comes from the board (270 for a Nocturne, 0
+for anything else), so a normal PC no longer comes up sideways; an explicit
+`/boot/nightfall-rotate` or `NIGHTFALL_ROTATE=` still wins.
+
 ### Why installation is deliberately paranoid
 
 The failure mode is "this machine now boots into a stripped-down kernel by
