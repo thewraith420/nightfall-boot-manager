@@ -2497,6 +2497,8 @@ static void nav_cb(lv_event_t *e) {
 static void add_back_row(void (*target)(void)) {
     lv_obj_t *b = make_row(LV_SYMBOL_LEFT, "Back", 1);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)target);
+    /* What Escape presses; see nav_is_escape(). */
+    lv_obj_add_flag(b, LV_OBJ_FLAG_USER_1);
 }
 
 static void show_main_menu(void) {
@@ -3338,6 +3340,335 @@ static void hold_boot_screen(void) {
     _exit(0);
 }
 
+/* ---------------- keyboard and mouse ----------------
+ *
+ * The Slate is touch-only, so this UI was too - and a desktop or laptop with
+ * no touchscreen got no menu at all (Nightfall exited "no touch input
+ * device" and init silently booted the default kernel). Keyboards and mice
+ * are read as ADDITIONAL input devices alongside touch; the touch path is
+ * untouched.
+ *
+ * Navigation is its own small focus manager rather than LVGL's groups. The
+ * reason is modality: dialogs live on lv_layer_top(), and with a group the
+ * buttons of the screen BEHIND an open dialog stay reachable with the arrow
+ * keys. Here the scope is recomputed on every key: the topmost dialog if
+ * there is one, otherwise the active screen. */
+
+enum nav_action { NAV_NONE, NAV_NEXT, NAV_PREV, NAV_FIRST, NAV_LAST,
+                  NAV_PAGE_UP, NAV_PAGE_DOWN, NAV_ACTIVATE, NAV_ESCAPE };
+
+/* The key -> action table, on its own so it can be tested without a
+ * keyboard. Left/Right follow Up/Down: dialogs lay their buttons out in a
+ * grid, lists in a column, and one linear order serves both. */
+static enum nav_action nav_action_for_key(int code, int shift) {
+    switch (code) {
+    case KEY_DOWN: case KEY_RIGHT:          return NAV_NEXT;
+    case KEY_UP:   case KEY_LEFT:           return NAV_PREV;
+    case KEY_TAB:                           return shift ? NAV_PREV : NAV_NEXT;
+    case KEY_HOME:                          return NAV_FIRST;
+    case KEY_END:                           return NAV_LAST;
+    case KEY_PAGEUP:                        return NAV_PAGE_UP;
+    case KEY_PAGEDOWN:                      return NAV_PAGE_DOWN;
+    case KEY_ENTER: case KEY_KPENTER: case KEY_SPACE: return NAV_ACTIVATE;
+    case KEY_ESC:  case KEY_BACKSPACE:      return NAV_ESCAPE;
+    default:                                return NAV_NONE;
+    }
+}
+
+#define NAV_MAX 96
+static lv_obj_t *g_nav_focus;
+static lv_style_t g_nav_style;
+static int g_nav_style_ready;
+
+static void nav_focus_deleted_cb(lv_event_t *e) {
+    if (lv_event_get_target(e) == g_nav_focus) g_nav_focus = NULL;
+}
+
+/* Focus is drawn as a border rather than an outline: rows are 100% wide, so
+ * an outline outside the box is clipped by the list at both edges. */
+static void nav_style_init(void) {
+    if (g_nav_style_ready) return;
+    lv_style_init(&g_nav_style);
+    lv_style_set_border_width(&g_nav_style, 8);
+    lv_style_set_border_color(&g_nav_style, lv_color_hex(0x8ec6ff));
+    lv_style_set_border_opa(&g_nav_style, LV_OPA_COVER);
+    lv_style_set_border_side(&g_nav_style, LV_BORDER_SIDE_FULL);
+    g_nav_style_ready = 1;
+}
+
+static void nav_set_focus(lv_obj_t *obj) {
+    if (g_nav_focus == obj) return;
+    nav_style_init();
+    if (g_nav_focus) {
+        lv_obj_remove_style(g_nav_focus, &g_nav_style, 0);
+        lv_obj_remove_event_cb(g_nav_focus, nav_focus_deleted_cb);
+        lv_obj_invalidate(g_nav_focus);
+    }
+    g_nav_focus = obj;
+    if (obj) {
+        lv_obj_add_style(obj, &g_nav_style, 0);
+        /* A screen change deletes the focused row; without this the pointer
+         * would dangle, and a NEW object allocated at the same address
+         * would look focused without the border. */
+        lv_obj_add_event_cb(obj, nav_focus_deleted_cb, LV_EVENT_DELETE, NULL);
+        lv_obj_scroll_to_view(obj, LV_ANIM_OFF);
+        lv_obj_invalidate(obj);
+    }
+}
+
+static void nav_collect(lv_obj_t *root, lv_obj_t **out, int *n) {
+    uint32_t cnt = lv_obj_get_child_count(root);
+    for (uint32_t i = 0; i < cnt; i++) {
+        lv_obj_t *c = lv_obj_get_child(root, i);
+        if (lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN)) continue;
+        /* Two kinds of button: ordinary lv_buttons (menu rows) and a msgbox's
+         * footer buttons, which are a SEPARATE class rooted at lv_obj, not
+         * a kind of lv_button - so with only the first check a dialog had no
+         * candidates at all and the keyboard did nothing inside one. */
+        if (lv_obj_has_class(c, &lv_button_class) ||
+            lv_obj_has_class(c, &lv_msgbox_footer_button_class)) {
+            if (lv_obj_has_flag(c, LV_OBJ_FLAG_CLICKABLE) &&
+                !lv_obj_has_state(c, LV_STATE_DISABLED) && *n < NAV_MAX)
+                out[(*n)++] = c;
+            continue;                 /* never descend into a button */
+        }
+        nav_collect(c, out, n);
+    }
+}
+
+/* Modal scoping: the topmost dialog, else the active screen. */
+static lv_obj_t *nav_scope(void) {
+    lv_obj_t *top = lv_layer_top();
+    uint32_t n = lv_obj_get_child_count(top);
+    return n ? lv_obj_get_child(top, n - 1) : lv_screen_active();
+}
+
+static int nav_candidates(lv_obj_t **out) {
+    int n = 0;
+    nav_collect(nav_scope(), out, &n);
+    return n;
+}
+
+static int nav_index_of(lv_obj_t **c, int n, lv_obj_t *o) {
+    for (int i = 0; i < n; i++) if (c[i] == o) return i;
+    return -1;
+}
+
+static const char *nav_button_text(lv_obj_t *btn) {
+    lv_obj_t *l = lv_obj_get_child(btn, 0);
+    return (l && lv_obj_check_type(l, &lv_label_class)) ? lv_label_get_text(l) : "";
+}
+
+/* Escape leaves: a screen's Back row (tagged by add_back_row - its label is
+ * NOT reliable, list rows use LVGL's dot-truncation and read "..." until
+ * laid out), or a dialog's Cancel / OK. Dialog buttons are matched by label:
+ * every dialog builds its own, they are never truncated, and tagging nine call
+ * sites would be more code to keep in step than the two words it saves. */
+#define NAV_ESCAPE_FLAG LV_OBJ_FLAG_USER_1
+static int nav_is_escape(lv_obj_t *btn) {
+    if (lv_obj_has_flag(btn, NAV_ESCAPE_FLAG)) return 1;
+    const char *t = nav_button_text(btn);
+    return !strcmp(t, "Cancel") || !strcmp(t, "OK");
+}
+
+/* Returns 1 if it did something. */
+static int nav_do(enum nav_action a) {
+    if (a == NAV_NONE) return 0;
+    lv_obj_t *c[NAV_MAX];
+    int n = nav_candidates(c);
+    if (n == 0) return 0;
+
+    int idx = nav_index_of(c, n, g_nav_focus);
+    /* Focus left over from somewhere else (behind a dialog that just
+     * opened, say) is dropped so its border does not linger. */
+    if (idx < 0 && g_nav_focus) nav_set_focus(NULL);
+
+    switch (a) {
+    case NAV_NEXT:
+        nav_set_focus(c[idx < 0 ? 0 : (idx + 1) % n]); return 1;
+    case NAV_PREV:
+        nav_set_focus(c[idx < 0 ? n - 1 : (idx + n - 1) % n]); return 1;
+    case NAV_FIRST:
+        nav_set_focus(c[0]); return 1;
+    case NAV_LAST:
+        nav_set_focus(c[n - 1]); return 1;
+    case NAV_PAGE_UP:
+        nav_set_focus(c[idx < 0 ? 0 : (idx >= 4 ? idx - 4 : 0)]); return 1;
+    case NAV_PAGE_DOWN:
+        nav_set_focus(c[idx < 0 ? 0 : (idx + 4 < n ? idx + 4 : n - 1)]); return 1;
+    case NAV_ACTIVATE:
+        /* Nothing focused yet: show where focus is instead of firing a
+         * button the person has not seen selected. */
+        if (idx < 0) { nav_set_focus(c[0]); return 1; }
+        lv_obj_send_event(c[idx], LV_EVENT_CLICKED, NULL);
+        return 1;
+    case NAV_ESCAPE:
+        for (int i = 0; i < n; i++)
+            if (nav_is_escape(c[i])) { lv_obj_send_event(c[i], LV_EVENT_CLICKED, NULL); return 1; }
+        return 0;
+    default: return 0;
+    }
+}
+
+/* ---- keyboards and mice as input sources ---- */
+
+enum { IN_KEYBOARD = 1, IN_MOUSE = 2 };
+#define MAX_INPUTS 16
+struct input_src { int fd; int kind; char name[32]; };
+static struct input_src g_inputs[MAX_INPUTS];
+static int g_input_n;
+/* Every node already probed, kept or not, so the hot-plug rescan only opens
+ * what is NEW instead of re-probing a dozen event nodes every second. */
+static char g_input_seen[64][32];
+static int g_input_seen_n;
+static int g_kb_shift;
+
+static int input_has(int fd, int type, int code) {
+    unsigned long bits[(KEY_MAX / (sizeof(long) * 8)) + 1] = {0};
+    if (ioctl(fd, EVIOCGBIT(type, sizeof(bits)), bits) < 0) return 0;
+    return bit_set(bits, code);
+}
+
+/* A keyboard has to be able to navigate: Enter and both vertical arrows.
+ * That excludes power buttons, lid switches and media-key nodes, which is
+ * what keeps this from adopting devices the Slate already has. A mouse needs
+ * relative X/Y and a left button; a touchpad reports absolute axes instead
+ * and is left to the touch path. */
+static int classify_input(int fd) {
+    int kind = 0;
+    if (input_has(fd, EV_KEY, KEY_ENTER) && input_has(fd, EV_KEY, KEY_UP) &&
+        input_has(fd, EV_KEY, KEY_DOWN)) kind |= IN_KEYBOARD;
+    if (input_has(fd, EV_REL, REL_X) && input_has(fd, EV_REL, REL_Y) &&
+        input_has(fd, EV_KEY, BTN_LEFT)) kind |= IN_MOUSE;
+    return kind;
+}
+
+static int input_seen(const char *name) {
+    for (int i = 0; i < g_input_seen_n; i++) if (!strcmp(g_input_seen[i], name)) return 1;
+    return 0;
+}
+
+/* Opens any keyboard/mouse not seen before. Returns how many it added. */
+static int inputs_rescan(void) {
+    DIR *dir = opendir("/dev/input");
+    if (!dir) return 0;
+    int added = 0;
+    struct dirent *de;
+    while ((de = readdir(dir))) {
+        if (strncmp(de->d_name, "event", 5) != 0) continue;
+        if (input_seen(de->d_name)) continue;
+        if (g_input_seen_n < 64) snprintf(g_input_seen[g_input_seen_n++], 32, "%.31s", de->d_name);
+        if (g_input_n >= MAX_INPUTS) continue;
+        char path[300];
+        snprintf(path, sizeof(path), "/dev/input/%s", de->d_name);
+        int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (fd < 0) continue;
+        int kind = classify_input(fd);
+        if (!kind) { close(fd); continue; }
+        char name[128] = "?";
+        ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+        fprintf(stderr, "nightfall: %s%s%s: %s (\"%s\")\n",
+                (kind & IN_KEYBOARD) ? "keyboard" : "", ((kind & IN_KEYBOARD) && (kind & IN_MOUSE)) ? "+" : "",
+                (kind & IN_MOUSE) ? "mouse" : "", path, name);
+        g_inputs[g_input_n].fd = fd;
+        g_inputs[g_input_n].kind = kind;
+        snprintf(g_inputs[g_input_n].name, sizeof(g_inputs[g_input_n].name), "%.31s", de->d_name);
+        g_input_n++;
+        added++;
+    }
+    closedir(dir);
+    return added;
+}
+
+/* An unplugged device stops answering; forgetting it (and its "seen" entry)
+ * lets a re-plug be picked up again. */
+static void input_drop(int i) {
+    close(g_inputs[i].fd);
+    for (int k = 0; k < g_input_seen_n; k++)
+        if (!strcmp(g_input_seen[k], g_inputs[i].name)) {
+            memmove(g_input_seen[k], g_input_seen[k + 1], (size_t)(g_input_seen_n - k - 1) * 32);
+            g_input_seen_n--;
+            break;
+        }
+    g_inputs[i] = g_inputs[--g_input_n];
+}
+
+/* One keyboard event. Returns 1 if it counts as the person being present
+ * (any key press), which is what cancels the auto-boot countdown. */
+static int kb_handle_event(const struct input_event *ev) {
+    if (ev->type != EV_KEY) return 0;
+    if (ev->code == KEY_LEFTSHIFT || ev->code == KEY_RIGHTSHIFT) { g_kb_shift = ev->value != 0; return 0; }
+    if (ev->value == 0) return 0;                       /* release */
+    enum nav_action a = nav_action_for_key(ev->code, g_kb_shift);
+    /* Held arrows repeat and should keep moving; a held Enter or Escape must
+     * not fire the same button again and again. */
+    if (ev->value == 2 && (a == NAV_ACTIVATE || a == NAV_ESCAPE)) return 1;
+    nav_do(a);
+    return 1;
+}
+
+/* Mouse: relative motion moves the shared pointer position, in LOGICAL
+ * space and with NO rotation applied. Touch has to be rotated because the
+ * digitizer is fixed to the panel; a mouse moves in the room, and what the
+ * person sees is already the logical orientation. */
+static lv_obj_t *g_cursor;
+
+static void mouse_cursor_show(struct nightfall_ctx *ctx) {
+    if (!g_cursor) {
+        g_cursor = lv_obj_create(lv_layer_sys());
+        lv_obj_remove_style_all(g_cursor);
+        lv_obj_set_size(g_cursor, 26, 26);
+        lv_obj_set_style_radius(g_cursor, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(g_cursor, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_bg_opa(g_cursor, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(g_cursor, lv_color_hex(0x1c2530), 0);
+        lv_obj_set_style_border_width(g_cursor, 4, 0);
+        lv_obj_remove_flag(g_cursor, LV_OBJ_FLAG_CLICKABLE);
+        if (ctx->indev) lv_indev_set_cursor(ctx->indev, g_cursor);
+    }
+    lv_obj_remove_flag(g_cursor, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void mouse_cursor_hide(void) {
+    if (g_cursor) lv_obj_add_flag(g_cursor, LV_OBJ_FLAG_HIDDEN);
+}
+
+static int g_mouse_seen;
+
+static void mouse_move(struct nightfall_ctx *ctx, int dx, int dy) {
+    if (!g_mouse_seen) {            /* first motion: start in the middle */
+        g_mouse_seen = 1;
+        ctx->touch_x = ctx->cw / 2;
+        ctx->touch_y = ctx->ch / 2;
+    }
+    int x = ctx->touch_x + dx, y = ctx->touch_y + dy;
+    ctx->touch_x = x < 0 ? 0 : (x >= ctx->cw ? ctx->cw - 1 : x);
+    ctx->touch_y = y < 0 ? 0 : (y >= ctx->ch ? ctx->ch - 1 : y);
+    mouse_cursor_show(ctx);
+}
+
+/* The wheel scrolls the list under the pointer's screen (never a dialog). */
+static void mouse_wheel(int notches) {
+    if (lv_obj_get_child_count(lv_layer_top()) || !g_list) return;
+    lv_obj_scroll_by_bounded(g_list, 0, notches * (ROW_H / 2), LV_ANIM_OFF);
+}
+
+/* One mouse event. Returns 1 if it counts as the person being present. */
+static int mouse_handle_event(struct nightfall_ctx *ctx, const struct input_event *ev, int *dx, int *dy) {
+    if (ev->type == EV_REL) {
+        if (ev->code == REL_X) { *dx += ev->value; return 1; }
+        if (ev->code == REL_Y) { *dy += ev->value; return 1; }
+        if (ev->code == REL_WHEEL) { mouse_wheel(ev->value); return 1; }
+        return 0;
+    }
+    if (ev->type == EV_KEY && ev->code == BTN_LEFT) {
+        ctx->touch_down = ev->value != 0;
+        if (ev->value) mouse_cursor_show(ctx);
+        return ev->value != 0;
+    }
+    return 0;
+}
+
 /* While a device is being waited for, this keeps the splash animating. */
 static void (*g_wait_pump)(void);
 
@@ -3358,6 +3689,65 @@ static int wait_for_device(const char *what, struct drm_dev *drm, struct touch_d
             if (limit_ms)
                 fprintf(stderr, "nightfall: gave up waiting for %s after %ds\n",
                         what, limit_ms / 1000);
+            return -1;
+        }
+        if (g_wait_pump) g_wait_pump();
+        usleep(WAIT_POLL_MS * 1000);
+        waited += WAIT_POLL_MS;
+    }
+}
+
+/* The auto-boot countdown, cancelled by the first sign the person is there -
+ * a touch, a key press or a mouse click. Shared state rather than main()
+ * locals so every input path cancels it the same way. */
+static int g_cd_timer_fd = -1, g_cd_cancelled;
+static lv_obj_t *g_cd_label;
+static void countdown_cancel(void) {
+    if (g_cd_timer_fd < 0 || g_cd_cancelled) return;
+    g_cd_cancelled = 1;
+    /* "Booting default in 30s - tap to choose" is false the moment someone
+     * has acted, and it follows you into every submenu. */
+    countdown_silence(g_cd_label);
+    struct itimerspec off = {0};
+    timerfd_settime(g_cd_timer_fd, 0, &off, NULL);
+}
+
+/* Waits for SOMETHING to steer with. Touch is still preferred and still
+ * waited for exactly as before; a keyboard or mouse only shortens the wait -
+ * once one is found, touch gets NIGHTFALL_INPUT_GRACE_SECS (default 4) to
+ * appear and then we go on without it. The grace exists because touch
+ * controllers really do arrive late (measured 1.4s on the Slate, behind i915
+ * and I2C-HID) and a keyboard that is already up must not make us skip one.
+ * With no input device at all it waits the full NIGHTFALL_WAIT_SECS and
+ * fails, as it always did. Returns 0 with touch->fd < 0 when only a keyboard
+ * or mouse was found. */
+static int wait_for_input(struct touch_dev *touch) {
+    const char *s = getenv("NIGHTFALL_WAIT_SECS");
+    int limit_ms = (s ? atoi(s) : 20) * 1000;
+    if (limit_ms < 0) limit_ms = 0;
+    const char *g = getenv("NIGHTFALL_INPUT_GRACE_SECS");
+    int grace_ms = (g ? atoi(g) : 4) * 1000;
+    if (grace_ms < 0) grace_ms = 0;
+
+    touch->fd = -1;
+    int waited = 0, first_other = -1;
+    for (;;) {
+        if (touch_open(touch) == 0) {
+            inputs_rescan();
+            if (waited)
+                fprintf(stderr, "nightfall: touch input device appeared after %d.%03ds\n",
+                        waited / 1000, waited % 1000);
+            return 0;
+        }
+        inputs_rescan();
+        if (g_input_n > 0 && first_other < 0) first_other = waited;
+        if (g_input_n > 0 && waited - first_other >= grace_ms) {
+            fprintf(stderr, "nightfall: no touch device; going on with %d keyboard/mouse device(s)\n", g_input_n);
+            return 0;
+        }
+        if (waited >= limit_ms) {
+            if (limit_ms)
+                fprintf(stderr, "nightfall: gave up waiting for an input device after %ds\n", limit_ms / 1000);
             return -1;
         }
         if (g_wait_pump) g_wait_pump();
@@ -3522,16 +3912,16 @@ int main(int argc, char **argv) {
     clock_gettime(CLOCK_MONOTONIC, &splash_shown);
     mark(show_splash ? "splash drawn" : "splash disabled");
 
-    struct touch_dev touch;
+    struct touch_dev touch = { .fd = -1 };   /* fd < 0: keyboard/mouse only */
     g_wait_pump = show_splash ? lvgl_pump : NULL;
-    int touch_rc = wait_for_device("touch input device", NULL, &touch);
+    int touch_rc = wait_for_input(&touch);
     g_wait_pump = NULL;
     if (touch_rc != 0) {
-        fprintf(stderr, "nightfall: no touch input device found\n");
+        fprintf(stderr, "nightfall: no touch, keyboard or mouse input device found\n");
         drm_close(&drm);
         return 1;
     }
-    mark("touch ready");
+    mark(touch.fd >= 0 ? "touch ready" : "keyboard/mouse ready (no touch)");
 
     lv_indev_t *indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
@@ -3552,7 +3942,6 @@ int main(int argc, char **argv) {
     int sig_fd = signalfd_setup();
     int timer_fd = -1;
     int seconds_left = timeout_secs;
-    int countdown_cancelled = 0;
     /* Distinguishes the timeout's auto-boot from a real tap. Without
      * this both look identical downstream, and a boot where the panel
      * stayed dark and the timeout fired reported itself as "booted user
@@ -3563,9 +3952,11 @@ int main(int argc, char **argv) {
         struct itimerspec its = {.it_value = {.tv_sec = 1}, .it_interval = {.tv_sec = 1}};
         if (timer_fd >= 0) timerfd_settime(timer_fd, 0, &its, NULL);
         if (countdown_label) {
-            lv_label_set_text_fmt(countdown_label, "Booting default in %ds - tap to choose", seconds_left);
+            lv_label_set_text_fmt(countdown_label, "Booting default in %ds - tap or press a key to choose", seconds_left);
         }
     }
+    g_cd_timer_fd = timer_fd;
+    g_cd_label = countdown_label;
 
     int have_master = 1;
     struct timespec last_tick;
@@ -3574,13 +3965,18 @@ int main(int argc, char **argv) {
     lv_timer_handler();
     mark("menu drawn");
 
-    struct pollfd fds[4];
+    struct pollfd fds[4 + MAX_INPUTS];
+    long last_rescan_ms = 0;
     char inst_buf[512];
     size_t inst_len = 0;
     while (g_selected < 0) {
         int nfds = 0;
         int touch_idx = -1, sig_idx = -1, timer_idx = -1, inst_idx = -1;
-        fds[nfds].fd = touch.fd; fds[nfds].events = POLLIN; touch_idx = nfds++;
+        if (touch.fd >= 0) { fds[nfds].fd = touch.fd; fds[nfds].events = POLLIN; touch_idx = nfds++; }
+        /* Keyboards and mice, fixed for THIS pass: the rescan and the drop of
+         * an unplugged one both happen after the events are read. */
+        int in_base = nfds, nin = g_input_n;
+        for (int i = 0; i < nin; i++) { fds[nfds].fd = g_inputs[i].fd; fds[nfds].events = POLLIN; nfds++; }
         if (sig_fd >= 0) { fds[nfds].fd = sig_fd; fds[nfds].events = POLLIN; sig_idx = nfds++; }
         if (timer_fd >= 0) { fds[nfds].fd = timer_fd; fds[nfds].events = POLLIN; timer_idx = nfds++; }
         if (g_install_fd >= 0) { fds[nfds].fd = g_install_fd; fds[nfds].events = POLLIN; inst_idx = nfds++; }
@@ -3640,7 +4036,7 @@ int main(int argc, char **argv) {
                     g_selected = 0;
                     g_selected_by_timeout = 1;
                 } else if (countdown_label) {
-                    lv_label_set_text_fmt(countdown_label, "Booting default in %ds - tap to choose", seconds_left);
+                    lv_label_set_text_fmt(countdown_label, "Booting default in %ds - tap or press a key to choose", seconds_left);
                 }
             }
         }
@@ -3652,7 +4048,7 @@ int main(int argc, char **argv) {
 
         if (g_selected >= 0 || g_install >= 0 || g_reload || g_power_action || g_live_boot || g_boot_external) break;
 
-        if (fds[touch_idx].revents & POLLIN) {
+        if (touch_idx >= 0 && (fds[touch_idx].revents & POLLIN)) {
             struct input_event ev;
             static int last_raw_x = -1, last_raw_y = -1;
             while (read(touch.fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
@@ -3693,17 +4089,37 @@ int main(int argc, char **argv) {
 
                 if (new_down >= 0 && new_down != ctx.touch_down) {
                     ctx.touch_down = new_down;
-                    if (new_down && timer_fd >= 0 && !countdown_cancelled) {
-                        /* first touch: cancel the auto-boot countdown */
-                        countdown_cancelled = 1;
-                        /* "Booting default in 30s - tap to choose" is
-                         * false the moment you have tapped, and it
-                         * follows you into every submenu. */
-                        countdown_silence(countdown_label);
-                        struct itimerspec off = {0};
-                        timerfd_settime(timer_fd, 0, &off, NULL);
+                    if (new_down) {
+                        mouse_cursor_hide();     /* touch takes over from a mouse pointer */
+                        countdown_cancel();      /* first touch cancels the auto-boot */
                     }
                 }
+            }
+        }
+
+        /* Keyboards and mice. */
+        {
+            int dx = 0, dy = 0, present = 0, dead[MAX_INPUTS], nd = 0;
+            for (int i = 0; i < nin; i++) {
+                if (!(fds[in_base + i].revents & (POLLIN | POLLERR | POLLHUP))) continue;
+                struct input_event ev;
+                ssize_t r;
+                while ((r = read(g_inputs[i].fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
+                    if (g_inputs[i].kind & IN_KEYBOARD) present |= kb_handle_event(&ev);
+                    if (g_inputs[i].kind & IN_MOUSE)    present |= mouse_handle_event(&ctx, &ev, &dx, &dy);
+                }
+                if (r < 0 && errno != EAGAIN && errno != EINTR) dead[nd++] = i;
+            }
+            if (dx || dy) mouse_move(&ctx, dx, dy);
+            for (int k = nd - 1; k >= 0; k--) input_drop(dead[k]);
+            if (present) countdown_cancel();
+
+            /* Hot-plug: a USB keyboard often enumerates a few seconds after
+             * Nightfall is already up. */
+            long now_ms = (long)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+            if (now_ms - last_rescan_ms >= 1000) {
+                last_rescan_ms = now_ms;
+                inputs_rescan();
             }
         }
 
@@ -3743,7 +4159,8 @@ int main(int argc, char **argv) {
         pump_until(&boot_shown, splash_min_ms());
     }
 
-    close(touch.fd);
+    if (touch.fd >= 0) close(touch.fd);
+    for (int i = 0; i < g_input_n; i++) close(g_inputs[i].fd);
     if (sig_fd >= 0) close(sig_fd);
     if (timer_fd >= 0) close(timer_fd);
     if (vt_fd >= 0) close(vt_fd);

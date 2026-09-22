@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
      * the device shows the countdown - an inaccuracy introduced by the
      * renderer itself, which rather defeats the point. */
     if (countdown_label)
-        lv_label_set_text_fmt(countdown_label, "Booting default in %ds - tap to choose", 30);
+        lv_label_set_text_fmt(countdown_label, "Booting default in %ds - tap or press a key to choose", 30);
     lv_refr_now(disp);
     screenshot("menu");
 

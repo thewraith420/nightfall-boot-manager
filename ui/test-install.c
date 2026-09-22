@@ -547,7 +547,7 @@ int main(void) {
         };
         lv_obj_t *cd2 = NULL;
         build_ui(e2, 3, 30, &cd2);
-        lv_label_set_text_fmt(cd2, "Booting default in %ds - tap to choose", 30);
+        lv_label_set_text_fmt(cd2, "Booting default in %ds - tap or press a key to choose", 30);
         lv_obj_update_layout(scr);
         ck(cd2 != NULL, "a timeout draws the countdown line");
 
@@ -699,6 +699,134 @@ int main(void) {
         lv_obj_clean(lv_layer_top());
         show_main_menu();
         #undef TOP_FOOTER_BTNS
+    }
+
+    /* --- keyboard navigation and mouse --- */
+    {
+        unsetenv("NIGHTFALL_KEXEC_BLOCKED");
+        static struct entry ne[2] = {{ "Ubuntu", "/boot/vmlinuz-x", "/boot/initrd-x", "ro", 0 },
+                                     { "Ubuntu old", "/boot/vmlinuz-y", "/boot/initrd-y", "ro", 0 }};
+        g_entries = ne; g_entry_n = 2;
+        #define HDR() lv_label_get_text(g_header)
+        #define ON_MAIN() (strstr(HDR(), "Nightfall") != NULL)
+        #define PUMP() do { lv_timer_handler(); lv_timer_handler(); } while (0)
+        struct input_event kev = { .type = EV_KEY };
+
+        /* the key table */
+        ck(nav_action_for_key(KEY_DOWN, 0) == NAV_NEXT && nav_action_for_key(KEY_UP, 0) == NAV_PREV, "Down/Up move next/previous");
+        ck(nav_action_for_key(KEY_RIGHT, 0) == NAV_NEXT && nav_action_for_key(KEY_LEFT, 0) == NAV_PREV, "Right/Left follow, for the dialog button grids");
+        ck(nav_action_for_key(KEY_TAB, 0) == NAV_NEXT && nav_action_for_key(KEY_TAB, 1) == NAV_PREV, "Tab goes forward and Shift+Tab back");
+        ck(nav_action_for_key(KEY_ENTER, 0) == NAV_ACTIVATE && nav_action_for_key(KEY_KPENTER, 0) == NAV_ACTIVATE &&
+           nav_action_for_key(KEY_SPACE, 0) == NAV_ACTIVATE, "Enter, keypad Enter and Space activate");
+        ck(nav_action_for_key(KEY_ESC, 0) == NAV_ESCAPE && nav_action_for_key(KEY_BACKSPACE, 0) == NAV_ESCAPE, "Escape and Backspace go back");
+        ck(nav_action_for_key(KEY_A, 0) == NAV_NONE, "an ordinary letter does nothing");
+
+        /* moving around the main menu */
+        lv_obj_clean(lv_layer_top()); nav_set_focus(NULL);
+        show_main_menu();
+        lv_obj_t *c[NAV_MAX];
+        int n = nav_candidates(c);
+        ck(n >= 6, "the main menu's rows are all reachable candidates");
+        ck(g_nav_focus == NULL, "no focus is drawn until a key is used (touch users never see one)");
+        nav_do(NAV_ACTIVATE);
+        ck(g_nav_focus == c[0] && ON_MAIN(), "Enter with nothing focused only SHOWS focus, it does not fire a button");
+        nav_do(NAV_NEXT);
+        ck(g_nav_focus == c[1], "Down moves to the next row");
+        nav_do(NAV_PREV); nav_do(NAV_PREV);
+        ck(g_nav_focus == c[n - 1], "Up from the first row wraps to the last");
+        nav_do(NAV_FIRST);
+        ck(g_nav_focus == c[0], "Home goes to the first row");
+        nav_do(NAV_LAST);
+        ck(g_nav_focus == c[n - 1], "End goes to the last");
+        ck(nav_do(NAV_ESCAPE) == 0, "Escape on the main menu (no Back row) does nothing");
+
+        /* activating a row runs the same handler a tap does */
+        nav_do(NAV_FIRST);
+        nav_do(NAV_ACTIVATE);
+        ck(!ON_MAIN(), "Enter on the first row opens the Boot screen");
+        ck(g_nav_focus == NULL, "and the deleted row does not leave a dangling focus behind");
+        nav_do(NAV_ESCAPE);
+        ck(ON_MAIN(), "Escape on a sub-screen presses its Back row");
+
+        /* key semantics */
+        nav_set_focus(NULL);
+        kev.code = KEY_DOWN; kev.value = 1;
+        ck(kb_handle_event(&kev) == 1 && g_nav_focus != NULL, "a key press moves focus and counts as the person being present");
+        kev.value = 0;
+        ck(kb_handle_event(&kev) == 0, "a key RELEASE does nothing");
+        nav_do(NAV_FIRST);
+        kev.code = KEY_ENTER; kev.value = 2;
+        kb_handle_event(&kev);
+        ck(ON_MAIN(), "a HELD Enter (auto-repeat) does not fire the button again");
+        kev.value = 1;
+        kb_handle_event(&kev);
+        ck(!ON_MAIN(), "the first Enter press does");
+        nav_do(NAV_ESCAPE);
+        kev.code = KEY_LEFTSHIFT; kev.value = 1; kb_handle_event(&kev);
+        nav_set_focus(NULL);
+        nav_candidates(c);
+        kev.code = KEY_TAB; kev.value = 1; kb_handle_event(&kev);
+        n = nav_candidates(c);
+        ck(g_nav_focus == c[n - 1], "Shift is tracked: Shift+Tab starts from the end");
+        kev.code = KEY_LEFTSHIFT; kev.value = 0; kb_handle_event(&kev);
+
+        /* modality: an open dialog owns the keyboard */
+        lv_obj_clean(lv_layer_top()); nav_set_focus(NULL);
+        show_main_menu();
+        nav_candidates(c);
+        nav_do(NAV_FIRST);
+        lv_obj_t *behind = g_nav_focus;
+        open_confirm_dialog(0);
+        lv_obj_update_layout(lv_layer_top());
+        n = nav_candidates(c);
+        ck(n == 4, "with a dialog open only ITS four buttons are reachable, not the menu behind it");
+        nav_do(NAV_NEXT);
+        ck(g_nav_focus != behind && nav_index_of(c, n, g_nav_focus) >= 0, "focus left behind the dialog is dropped and moves into it");
+        ck(nav_do(NAV_ESCAPE) == 1, "Escape finds the dialog's Cancel");
+        PUMP();
+        ck(lv_obj_get_child_count(lv_layer_top()) == 0, "and the dialog closes");
+        nav_set_focus(NULL);
+
+        /* the mouse */
+        struct nightfall_ctx mc = { .rot = ROT_270, .cw = 600, .ch = 900 };
+        g_mouse_seen = 0;
+        mouse_move(&mc, 10, -5);
+        ck(mc.touch_x == 310 && mc.touch_y == 445, "the first motion starts from the middle of the screen");
+        mouse_move(&mc, 5000, 5000);
+        ck(mc.touch_x == 599 && mc.touch_y == 899, "the pointer is clamped to the bottom-right edge");
+        mouse_move(&mc, -9000, -9000);
+        ck(mc.touch_x == 0 && mc.touch_y == 0, "and to the top-left edge");
+        mouse_move(&mc, 20, 30);
+        ck(mc.touch_x == 20 && mc.touch_y == 30, "motion is applied unrotated even with ROT_270: a mouse moves in the room, not the panel");
+        ck(g_cursor && !lv_obj_has_flag(g_cursor, LV_OBJ_FLAG_HIDDEN), "a cursor is drawn once the mouse moves");
+        mouse_cursor_hide();
+        ck(lv_obj_has_flag(g_cursor, LV_OBJ_FLAG_HIDDEN), "and hidden again when touch takes over");
+        {
+            struct input_event mev = { .type = EV_REL, .code = REL_X, .value = 7 };
+            int dx = 0, dy = 0;
+            ck(mouse_handle_event(&mc, &mev, &dx, &dy) == 1 && dx == 7, "REL_X accumulates into dx");
+            mev.code = REL_Y; mev.value = -3;
+            mouse_handle_event(&mc, &mev, &dx, &dy);
+            ck(dy == -3, "and REL_Y into dy");
+            mev.type = EV_KEY; mev.code = BTN_LEFT; mev.value = 1;
+            mouse_handle_event(&mc, &mev, &dx, &dy);
+            ck(mc.touch_down == 1, "the left button presses at the pointer");
+            mev.value = 0;
+            mouse_handle_event(&mc, &mev, &dx, &dy);
+            ck(mc.touch_down == 0, "and releases");
+            mev.code = BTN_RIGHT; mev.value = 1;
+            ck(mouse_handle_event(&mc, &mev, &dx, &dy) == 0 && mc.touch_down == 0, "the right button does nothing");
+        }
+        {
+            int nullfd = open("/dev/null", O_RDONLY);
+            ck(classify_input(nullfd) == 0, "a file that is not an input device is never adopted");
+            close(nullfd);
+        }
+        lv_obj_clean(lv_layer_top());
+        show_main_menu();
+        #undef HDR
+        #undef ON_MAIN
+        #undef PUMP
     }
 
     printf("\npassed: %d  failed: %d\n", passes, fails);

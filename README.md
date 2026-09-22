@@ -220,12 +220,44 @@ it is not supported yet.
   present, and that filesystem must be **ext4** for now.
 - **GRUB** as the bootloader: installation adds an entry to
   `/boot/grub/custom.cfg`.
-- **A touchscreen** (or a QEMU `usb-tablet`) - see the input note below; a
-  keyboard/mouse UI is being added.
+- **A way to steer**: a touchscreen, a keyboard, or a mouse (a QEMU
+  `usb-tablet` also works, as an absolute pointer). See *Keyboard and mouse*
+  below. With none of these Nightfall cannot show a menu, exits, and init
+  boots the default kernel.
 
 The screen's default rotation now comes from the board (270 for a Nocturne, 0
 for anything else), so a normal PC no longer comes up sideways; an explicit
 `/boot/nightfall-rotate` or `NIGHTFALL_ROTATE=` still wins.
+
+### Keyboard and mouse
+
+Touch is still what the Slate uses and its code path is unchanged. On a
+machine without a touchscreen (or with a keyboard attached to one), Nightfall
+also reads keyboards and mice, including ones plugged in after it started
+(it looks for new devices about once a second).
+
+| Key | Does |
+|---|---|
+| Down / Right / Tab | next item |
+| Up / Left / Shift+Tab | previous item |
+| Home / End, PgUp / PgDn | first / last, jump by four |
+| Enter, Space | activate the focused item |
+| Escape, Backspace | press the screen's **Back** row, or a dialog's **Cancel** / **OK** |
+
+Focus is a blue border and stays invisible until a key is pressed, so touch
+users never see it. **The first Enter only shows where focus is** - it does
+not fire a button you have not seen selected. An open dialog owns the
+keyboard: the arrows cannot reach the menu behind it. Any key press cancels
+the auto-boot countdown, like the first touch. A mouse moves a pointer (with
+a cursor drawn only once it moves), the left button clicks and the wheel
+scrolls the list; mouse motion is deliberately *not* rotated with the screen,
+because a mouse moves in the room while a touch digitizer is fixed to the
+panel.
+
+Known limits: the **Edit** dialog's text field cannot be typed into from a
+hardware keyboard yet (its buttons work, the on-screen keyboard is
+tap-driven); a laptop **touchpad** is still treated as an *absolute*
+touchscreen (pad corner = screen corner), not as a relative pointer.
 
 ### Why installation is deliberately paranoid
 
