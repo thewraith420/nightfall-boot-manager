@@ -763,13 +763,6 @@ static void dump_interrupts(const char *label) {
     fclose(f);
 }
 
-/* TEMPORARY diagnostic, NIGHTFALL_DEBUG_FLUSH only - see main()'s
- * NIGHTFALL_DEBUG_FILL comment for the hardware symptom this is chasing.
- * The fill test proved raw writes into d->map reach the whole panel, so
- * the question left is what LVGL actually asks THIS function to draw -
- * every call, every early-exit, so a hardware boot can show it directly
- * instead of guessing from what does or doesn't appear on screen. Remove
- * once that's answered. */
 /* TEMPORARY diagnostic, NIGHTFALL_DEBUG_INPUT only - first-ever hardware
  * test of keyboard/mouse navigation (e70b290) found NOTHING responds once
  * inside the actual menu, on real hardware that isn't touch at all. Logs
@@ -785,6 +778,13 @@ static int input_dbg(void) {
     return v;
 }
 
+/* TEMPORARY diagnostic, NIGHTFALL_DEBUG_FLUSH only - see main()'s
+ * NIGHTFALL_DEBUG_FILL comment for the hardware symptom this is chasing.
+ * The fill test proved raw writes into d->map reach the whole panel, so
+ * the question left is what LVGL actually asks THIS function to draw -
+ * every call, every early-exit, so a hardware boot can show it directly
+ * instead of guessing from what does or doesn't appear on screen. Remove
+ * once that's answered. */
 static int flush_dbg(void) {
     static int v = -1;
     if (v < 0) v = getenv("NIGHTFALL_DEBUG_FLUSH") ? 1 : 0;
@@ -1317,6 +1317,50 @@ static void show_kexec_blocked_notice(void) {
 /* Edit: GRUB-style one-time cmdline tweak, never persisted - just
  * mutates this entry's in-memory copy for the rest of this run, same
  * as GRUB's own 'e' edit-before-boot. */
+/* Defined further down, next to the input devices it reads. */
+static int have_physical_keyboard(void);
+
+/* The textarea a REAL keyboard should type into, if one is open.
+ *
+ * Tracked explicitly rather than found via the on-screen keyboard, because
+ * the on-screen keyboard is no longer always there: on a machine with a
+ * real keyboard it is not created at all (it costs KEYBOARD_PCT_H of the
+ * screen and duplicates a keyboard the person is already touching - Bob, on
+ * hardware: "the osk still showing up"). Cleared by the textarea's own
+ * delete event, so no dialog close path has to remember to do it and a
+ * stale pointer cannot outlive the dialog. */
+static lv_obj_t *g_text_input;
+
+static void text_input_deleted_cb(lv_event_t *e) {
+    if (lv_event_get_target(e) == g_text_input) g_text_input = NULL;
+}
+
+/* What every text dialog does with its textarea: remember it for the real
+ * keyboard, and put up an on-screen one only for a machine with no other
+ * way to type. Returns that on-screen keyboard, or NULL when there is a
+ * real keyboard - the caller needs to know only so it can decide whether to
+ * reserve the bottom of the screen for it. */
+static lv_obj_t *text_input_begin(lv_obj_t *ta) {
+    g_text_input = ta;
+    lv_obj_add_event_cb(ta, text_input_deleted_cb, LV_EVENT_DELETE, NULL);
+    if (have_physical_keyboard()) return NULL;
+    /* Parented to lv_layer_top(), NOT lv_screen_active(): lv_msgbox_create
+     * puts a 100%x100% backdrop on lv_layer_top() with the dialog inside,
+     * so a keyboard on the screen layer sits UNDERNEATH it entirely -
+     * drawn greyed out behind the dim, with the backdrop swallowing every
+     * tap meant for its keys. Found on real hardware: the keyboard drew
+     * perfectly and was completely dead. Created after the msgbox so as a
+     * later sibling it draws above the backdrop and receives touches, and
+     * deliberately a SIBLING rather than a child, because the dialogs
+     * delete it explicitly and as a child it would be deleted a second
+     * time when the msgbox tears its backdrop down. */
+    lv_obj_t *kb = lv_keyboard_create(lv_layer_top());
+    lv_obj_set_size(kb, lv_pct(100), lv_pct(KEYBOARD_PCT_H));
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(kb, ta);
+    return kb;
+}
+
 struct edit_ctx {
     int idx;
     lv_obj_t *mbox;
@@ -1325,7 +1369,8 @@ struct edit_ctx {
 };
 
 static void edit_close(struct edit_ctx *ctx) {
-    lv_obj_delete_async(ctx->kb);
+    /* NULL whenever there is a real keyboard - see text_input_begin(). */
+    if (ctx->kb) lv_obj_delete_async(ctx->kb);
     lv_msgbox_close_async(ctx->mbox);
     free(ctx);
 }
@@ -1443,30 +1488,18 @@ static void edit_cb(lv_event_t *e) {
     lv_textarea_set_cursor_pos(ctx->ta, 0);
     lv_obj_scroll_to_y(ctx->ta, 0, LV_ANIM_OFF);
 
-    /* Parented to lv_layer_top(), NOT lv_screen_active().
-     *
-     * lv_msgbox_create(NULL) puts a backdrop object on lv_layer_top()
-     * sized 100%x100% (lv_msgbox.c) and the dialog inside it. A
-     * keyboard on the screen layer therefore sits UNDERNEATH that
-     * backdrop entirely: it renders greyed-out behind the dim and the
-     * backdrop swallows every tap meant for its keys. Found on real
-     * hardware - the keyboard drew perfectly and was completely dead.
-     *
-     * Created after the msgbox, so as a later sibling of the backdrop
-     * it draws above it and receives touches. Deliberately a SIBLING
-     * rather than a child of the backdrop: edit_close() deletes the
-     * keyboard explicitly, and as a child it would be deleted a second
-     * time when the msgbox tears its backdrop down. */
-    ctx->kb = lv_keyboard_create(lv_layer_top());
-    lv_obj_set_size(ctx->kb, lv_pct(100), lv_pct(KEYBOARD_PCT_H));
-    lv_obj_align(ctx->kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_keyboard_set_textarea(ctx->kb, ctx->ta);
+    ctx->kb = text_input_begin(ctx->ta);
 
-    /* The keyboard owns the bottom half of the screen, so a centred
-     * dialog fights it for space. Pin the dialog to the top and cap its
-     * height at what is left. */
-    lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
-    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, ui_px(16));
+    /* The on-screen keyboard owns the bottom half of the screen, so a
+     * centred dialog fights it for space: pin the dialog to the top and
+     * cap its height at what is left. With a real keyboard there is no
+     * on-screen one and none of that applies - the dialog gets the whole
+     * screen and its normal centred position, which is also more room to
+     * read a 250-character command line in. */
+    if (ctx->kb) {
+        lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
+        lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, ui_px(16));
+    }
 
     /* Two ways to accept, because they mean different things: use it
      * for this boot, or remember it for this kernel every boot. The
@@ -2343,7 +2376,8 @@ struct bkname_ctx {
 };
 
 static void bkname_close(struct bkname_ctx *ctx) {
-    lv_obj_delete_async(ctx->kb);
+    /* NULL whenever there is a real keyboard - see text_input_begin(). */
+    if (ctx->kb) lv_obj_delete_async(ctx->kb);
     lv_msgbox_close_async(ctx->mbox);
     free(ctx);
 }
@@ -2399,13 +2433,11 @@ static void rename_click_cb(lv_event_t *e) {
     lv_textarea_set_text(ctx->ta, g_backups[idx].name);
     lv_textarea_set_cursor_pos(ctx->ta, 0);
 
-    ctx->kb = lv_keyboard_create(lv_layer_top());
-    lv_obj_set_size(ctx->kb, lv_pct(100), lv_pct(KEYBOARD_PCT_H));
-    lv_obj_align(ctx->kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_keyboard_set_textarea(ctx->kb, ctx->ta);
-
-    lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
-    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, ui_px(16));
+    ctx->kb = text_input_begin(ctx->ta);
+    if (ctx->kb) {
+        lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
+        lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, ui_px(16));
+    }
 
     lv_obj_t *go = lv_msgbox_add_footer_button(ctx->mbox, "Rename");
     lv_obj_t *no = lv_msgbox_add_footer_button(ctx->mbox, "Cancel");
@@ -2460,13 +2492,11 @@ static void backup_click_cb(lv_event_t *e) {
     lv_textarea_set_text(ctx->ta, def);
     lv_textarea_set_cursor_pos(ctx->ta, 0);
 
-    ctx->kb = lv_keyboard_create(lv_layer_top());
-    lv_obj_set_size(ctx->kb, lv_pct(100), lv_pct(KEYBOARD_PCT_H));
-    lv_obj_align(ctx->kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_keyboard_set_textarea(ctx->kb, ctx->ta);
-
-    lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
-    lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, ui_px(16));
+    ctx->kb = text_input_begin(ctx->ta);
+    if (ctx->kb) {
+        lv_obj_set_style_max_height(ctx->mbox, lv_pct(100 - KEYBOARD_PCT_H - 4), 0);
+        lv_obj_align(ctx->mbox, LV_ALIGN_TOP_MID, 0, ui_px(16));
+    }
 
     lv_obj_t *go = lv_msgbox_add_footer_button(ctx->mbox, "Back up");
     lv_obj_t *no = lv_msgbox_add_footer_button(ctx->mbox, "Cancel");
@@ -3563,16 +3593,27 @@ static void hold_boot_screen(void) {
  * keys. Here the scope is recomputed on every key: the topmost dialog if
  * there is one, otherwise the active screen. */
 
-enum nav_action { NAV_NONE, NAV_NEXT, NAV_PREV, NAV_FIRST, NAV_LAST,
+enum nav_action { NAV_NONE, NAV_NEXT, NAV_PREV, NAV_UP, NAV_DOWN, NAV_FIRST, NAV_LAST,
                   NAV_PAGE_UP, NAV_PAGE_DOWN, NAV_ACTIVATE, NAV_ESCAPE };
 
 /* The key -> action table, on its own so it can be tested without a
- * keyboard. Left/Right follow Up/Down: dialogs lay their buttons out in a
- * grid, lists in a column, and one linear order serves both. */
+ * keyboard. Left/Right and Up/Down used to share one action (NAV_NEXT/PREV,
+ * a flat step through creation order) on the theory that dialogs lay their
+ * buttons out in a grid, lists in a column, and one linear order serves
+ * both. Real hardware disproved that: found on a genuine 2x2 footer grid
+ * (Edit/Set Default over Cancel/Boot) - Right correctly moved Edit->Set
+ * Default (next in creation order, which also happens to be next in the
+ * row), but Down did the exact same thing instead of reaching Cancel below
+ * Edit, because it WAS the exact same action. Up/Down now move by a whole
+ * visual row (see nav_row_width) - on any plain vertical list that is still
+ * one candidate, so nothing changes there; a real grid is the one case that
+ * needed the difference. */
 static enum nav_action nav_action_for_key(int code, int shift) {
     switch (code) {
-    case KEY_DOWN: case KEY_RIGHT:          return NAV_NEXT;
-    case KEY_UP:   case KEY_LEFT:           return NAV_PREV;
+    case KEY_DOWN:                          return NAV_DOWN;
+    case KEY_UP:                            return NAV_UP;
+    case KEY_RIGHT:                         return NAV_NEXT;
+    case KEY_LEFT:                          return NAV_PREV;
     case KEY_TAB:                           return shift ? NAV_PREV : NAV_NEXT;
     case KEY_HOME:                          return NAV_FIRST;
     case KEY_END:                           return NAV_LAST;
@@ -3586,36 +3627,79 @@ static enum nav_action nav_action_for_key(int code, int shift) {
 
 #define NAV_MAX 96
 static lv_obj_t *g_nav_focus;
-static lv_style_t g_nav_style;
-static int g_nav_style_ready;
 
-static void nav_focus_deleted_cb(lv_event_t *e) {
-    if (lv_event_get_target(e) == g_nav_focus) g_nav_focus = NULL;
-}
+/* The saved border values belong to the object that was focused, so they
+ * are dropped with it - restoring them onto whatever is focused NEXT would
+ * paint one object's decoration onto an unrelated one. */
+static void nav_focus_deleted_cb(lv_event_t *e);
 
 /* Focus is drawn as a border rather than an outline: rows are 100% wide, so
- * an outline outside the box is clipped by the list at both edges. */
-static void nav_style_init(void) {
-    if (g_nav_style_ready) return;
-    lv_style_init(&g_nav_style);
-    lv_style_set_border_width(&g_nav_style, ui_px(8));
-    lv_style_set_border_color(&g_nav_style, lv_color_hex(0x8ec6ff));
-    lv_style_set_border_opa(&g_nav_style, LV_OPA_COVER);
-    lv_style_set_border_side(&g_nav_style, LV_BORDER_SIDE_FULL);
-    g_nav_style_ready = 1;
+ * an outline outside the box is clipped by the list at both edges.
+ *
+ * Applied as LOCAL style properties, not via lv_obj_add_style(), and this
+ * is the whole point rather than a detail: in LVGL a local property always
+ * beats an added style at the same selector, and several dialog buttons set
+ * local border properties of their own for decoration - open_confirm_dialog
+ * gives Cancel and Boot a 1px top divider that way. With the ring as an
+ * added style those two buttons silently kept their 1px TOP border and
+ * showed no focus at all, which is exactly what Bob hit on hardware:
+ * navigation worked (Down, Down, Enter booted the right thing) but the two
+ * buttons he most needed to see - Cancel and Boot - were the two that could
+ * never highlight. Measured, not guessed: computed border width came back 8
+ * on Edit/Set Default and 1 on Cancel/Boot.
+ *
+ * The previous appearance is saved and put back when focus leaves, so a
+ * button's own decoration survives being focused and unfocused. The saved
+ * values are the COMPUTED ones, so restoring them writes locals where there
+ * may have been none - visually identical, and these are short-lived menu
+ * rows and dialog buttons that nothing else restyles afterwards. */
+#define NAV_RING_COLOR 0x8ec6ff
+static struct {
+    int32_t width;
+    lv_border_side_t side;
+    lv_color_t color;
+    lv_opa_t opa;
+    int valid;
+} g_nav_saved;
+
+static void nav_focus_deleted_cb(lv_event_t *e) {
+    if (lv_event_get_target(e) == g_nav_focus) {
+        g_nav_focus = NULL;
+        g_nav_saved.valid = 0;
+    }
+}
+
+static void nav_ring_restore(lv_obj_t *obj) {
+    if (!obj || !g_nav_saved.valid) return;
+    lv_obj_set_style_border_width(obj, g_nav_saved.width, 0);
+    lv_obj_set_style_border_side(obj, g_nav_saved.side, 0);
+    lv_obj_set_style_border_color(obj, g_nav_saved.color, 0);
+    lv_obj_set_style_border_opa(obj, g_nav_saved.opa, 0);
+    g_nav_saved.valid = 0;
+}
+
+static void nav_ring_apply(lv_obj_t *obj) {
+    g_nav_saved.width = lv_obj_get_style_border_width(obj, LV_PART_MAIN);
+    g_nav_saved.side  = lv_obj_get_style_border_side(obj, LV_PART_MAIN);
+    g_nav_saved.color = lv_obj_get_style_border_color(obj, LV_PART_MAIN);
+    g_nav_saved.opa   = lv_obj_get_style_border_opa(obj, LV_PART_MAIN);
+    g_nav_saved.valid = 1;
+    lv_obj_set_style_border_width(obj, ui_px(8), 0);
+    lv_obj_set_style_border_side(obj, LV_BORDER_SIDE_FULL, 0);
+    lv_obj_set_style_border_color(obj, lv_color_hex(NAV_RING_COLOR), 0);
+    lv_obj_set_style_border_opa(obj, LV_OPA_COVER, 0);
 }
 
 static void nav_set_focus(lv_obj_t *obj) {
     if (g_nav_focus == obj) return;
-    nav_style_init();
     if (g_nav_focus) {
-        lv_obj_remove_style(g_nav_focus, &g_nav_style, 0);
+        nav_ring_restore(g_nav_focus);
         lv_obj_remove_event_cb(g_nav_focus, nav_focus_deleted_cb);
         lv_obj_invalidate(g_nav_focus);
     }
     g_nav_focus = obj;
     if (obj) {
-        lv_obj_add_style(obj, &g_nav_style, 0);
+        nav_ring_apply(obj);
         /* A screen change deletes the focused row; without this the pointer
          * would dangle, and a NEW object allocated at the same address
          * would look focused without the border. */
@@ -3645,11 +3729,25 @@ static void nav_collect(lv_obj_t *root, lv_obj_t **out, int *n) {
     }
 }
 
-/* Modal scoping: the topmost dialog, else the active screen. */
+/* Modal scoping: the topmost dialog, else the active screen.
+ *
+ * The on-screen keyboard is SKIPPED, even though it is deliberately the
+ * last child of lv_layer_top() in every text dialog (created after the
+ * msgbox so it draws above the backdrop and receives taps - see edit_cb).
+ * It is an input surface sitting on top, not the modal scope: it is an
+ * lv_buttonmatrix, so it has no button children to collect, and taking it
+ * as the scope yields ZERO candidates and kills navigation entirely.
+ * Found by a test written for typing, confirmed as exactly what Bob hit on
+ * hardware - the Edit dialog opened, the on-screen keyboard appeared, and
+ * the real keyboard could neither type NOR reach Use once / Save /
+ * Cancel. */
 static lv_obj_t *nav_scope(void) {
     lv_obj_t *top = lv_layer_top();
-    uint32_t n = lv_obj_get_child_count(top);
-    return n ? lv_obj_get_child(top, n - 1) : lv_screen_active();
+    for (uint32_t i = lv_obj_get_child_count(top); i > 0; i--) {
+        lv_obj_t *c = lv_obj_get_child(top, i - 1);
+        if (!lv_obj_check_type(c, &lv_keyboard_class)) return c;
+    }
+    return lv_screen_active();
 }
 
 static int nav_candidates(lv_obj_t **out) {
@@ -3680,11 +3778,54 @@ static int nav_is_escape(lv_obj_t *btn) {
     return !strcmp(t, "Cancel") || !strcmp(t, "OK");
 }
 
+/* Where Up/Down actually go: find the closest row strictly above (dir<0)
+ * or below (dir>0) c[idx] by ACTUAL laid-out Y - never assumed from which
+ * screen this is, so nothing has to be kept in sync with whatever the
+ * layout code decides - then, within that row, the candidate whose X is
+ * closest to c[idx]'s own X: the column a person would actually aim for.
+ *
+ * A plain vertical list has one candidate per row, so "the row" always has
+ * exactly one member and this reduces to "the next/previous row" - Up/Down
+ * end up identical to Left/Right's single-step move there, unchanged from
+ * before this existed. The one case this was built for is a real grid, and
+ * real hardware found it does not even have to be a SYMMETRIC one: this
+ * dialog's actual footer (no Recovery, the common case) is Edit+Set
+ * Default sharing a row over Cancel ALONE on its own full-width row over
+ * Boot alone on another - nearest-by-X still gets this right (Cancel and
+ * Boot each have only one candidate to offer, and Up from either finds
+ * Edit over Set Default by X position, not a row-width arithmetic that
+ * only works when every row happens to be the same width). A fixed
+ * idx +/- row_width was tried first and got exactly this case wrong -
+ * "Up from Cancel" landed on Set Default instead of Edit, because Cancel's
+ * own row is 1 wide and Edit/Set Default's is 2, and nothing says those
+ * line up. */
+static int nav_vertical_target(lv_obj_t **c, int n, int idx, int dir) {
+    if (idx < 0 || idx >= n) return idx < 0 ? 0 : idx;
+    int32_t y0 = lv_obj_get_y(c[idx]), x0 = lv_obj_get_x(c[idx]);
+    int32_t row_y = 0; int have_row = 0;
+    for (int i = 0; i < n; i++) {
+        int32_t yi = lv_obj_get_y(c[i]);
+        if (dir < 0 ? (yi < y0) : (yi > y0)) {
+            if (!have_row || (dir < 0 ? (yi > row_y) : (yi < row_y))) { row_y = yi; have_row = 1; }
+        }
+    }
+    if (!have_row) return idx;
+    int best = -1; int32_t best_dx = 0;
+    for (int i = 0; i < n; i++) {
+        if (lv_obj_get_y(c[i]) != row_y) continue;
+        int32_t dxv = lv_obj_get_x(c[i]) - x0; if (dxv < 0) dxv = -dxv;
+        if (best < 0 || dxv < best_dx) { best = i; best_dx = dxv; }
+    }
+    return best >= 0 ? best : idx;
+}
+
 /* Returns 1 if it did something. */
 static int nav_do(enum nav_action a) {
     if (a == NAV_NONE) return 0;
     lv_obj_t *c[NAV_MAX];
     int n = nav_candidates(c);
+    if (input_dbg()) fprintf(stderr, "nightfall: nav_do action=%d candidates=%d focus=%p\n",
+                              (int)a, n, (void *)g_nav_focus);
     if (n == 0) return 0;
 
     int idx = nav_index_of(c, n, g_nav_focus);
@@ -3697,6 +3838,19 @@ static int nav_do(enum nav_action a) {
         nav_set_focus(c[idx < 0 ? 0 : (idx + 1) % n]); return 1;
     case NAV_PREV:
         nav_set_focus(c[idx < 0 ? n - 1 : (idx + n - 1) % n]); return 1;
+    case NAV_UP:
+        /* Clamped, not wrapped - unlike Left/Right/Tab. Wrapping a grid
+         * row-to-row would jump between columns that were never lined up
+         * to begin with, and wrapping a long list top-to-bottom on Up/Down
+         * reads as a bug where the same wrap on Left/Right (a single step)
+         * does not. Nothing focused yet starts at the top, same as every
+         * other action here - nav_vertical_target's own idx<0 passthrough
+         * is never reached because idx is normalised to 0 first. */
+        nav_set_focus(c[idx < 0 ? 0 : nav_vertical_target(c, n, idx, -1)]);
+        return 1;
+    case NAV_DOWN:
+        nav_set_focus(c[idx < 0 ? 0 : nav_vertical_target(c, n, idx, 1)]);
+        return 1;
     case NAV_FIRST:
         nav_set_focus(c[0]); return 1;
     case NAV_LAST:
@@ -3795,6 +3949,18 @@ static int classify_input(int fd, int *code_x, int *code_y) {
     return kind;
 }
 
+/* Whether a real keyboard has been found - the one thing the text dialogs
+ * need to know, to decide whether an on-screen keyboard is worth half the
+ * screen. Declared up near those dialogs; defined here, beside the list it
+ * reads. Deliberately "is there one NOW" rather than a value latched at
+ * startup: a USB keyboard plugged in later is picked up by the same
+ * once-a-second rescan everything else uses. */
+static int have_physical_keyboard(void) {
+    for (int i = 0; i < g_input_n; i++)
+        if (g_inputs[i].kind & IN_KEYBOARD) return 1;
+    return 0;
+}
+
 static int input_seen(const char *name) {
     for (int i = 0; i < g_input_seen_n; i++) if (!strcmp(g_input_seen[i], name)) return 1;
     return 0;
@@ -3861,6 +4027,72 @@ static void input_drop(int i) {
     g_inputs[i] = g_inputs[--g_input_n];
 }
 
+/* ---- typing into a textarea with a REAL keyboard ----
+ *
+ * The text dialogs (the cmdline editor, backup rename, backup name) were
+ * built for the Slate, where the only way to type is tapping an on-screen
+ * keyboard. On a laptop that left the real keyboard doing nothing at all -
+ * Bob, on hardware: "that dosen't accept opens an on screen keyboard and
+ * ignores the real one". Every printable key resolves to NAV_NONE in
+ * nav_action_for_key(), and nothing else ever looked at them.
+ *
+ * text_input_begin() records the open textarea (and now skips the
+ * on-screen keyboard entirely when there is a real one), so this is just
+ * "the textarea currently being edited, if any". */
+static lv_obj_t *active_textarea(void) {
+    return g_text_input;
+}
+
+/* evdev keycode -> what a textarea should receive: a printable character as
+ * its ASCII value, or one of LVGL's own LV_KEY_* editing codes, which
+ * lv_textarea already understands. 0 means "not a typing key" - the caller
+ * then treats it as navigation as before.
+ *
+ * US layout, deliberately: it is what the machines this runs on have, and a
+ * kernel command line is ASCII anyway. Getting this wrong for a different
+ * layout mistypes a character - it cannot break anything structurally, and
+ * a machine with no keyboard to be wrong about still gets the on-screen
+ * one, which is laid out by LVGL rather than by this table. */
+static uint32_t key_to_char(int code, int shift) {
+    switch (code) {
+    case KEY_BACKSPACE: return LV_KEY_BACKSPACE;
+    case KEY_DELETE:    return LV_KEY_DEL;
+    case KEY_LEFT:      return LV_KEY_LEFT;
+    case KEY_RIGHT:     return LV_KEY_RIGHT;
+    case KEY_HOME:      return LV_KEY_HOME;
+    case KEY_END:       return LV_KEY_END;
+    case KEY_SPACE:     return ' ';
+    default: break;
+    }
+    static const char row_q[]  = "qwertyuiop";
+    static const char row_qs[] = "QWERTYUIOP";
+    static const char row_a[]  = "asdfghjkl";
+    static const char row_as[] = "ASDFGHJKL";
+    static const char row_z[]  = "zxcvbnm";
+    static const char row_zs[] = "ZXCVBNM";
+    static const char digits[]  = "1234567890";
+    static const char digits_s[] = "!@#$%^&*()";
+    if (code >= KEY_Q && code <= KEY_P) return (uint32_t)(shift ? row_qs : row_q)[code - KEY_Q];
+    if (code >= KEY_A && code <= KEY_L) return (uint32_t)(shift ? row_as : row_a)[code - KEY_A];
+    if (code >= KEY_Z && code <= KEY_M) return (uint32_t)(shift ? row_zs : row_z)[code - KEY_Z];
+    if (code >= KEY_1 && code <= KEY_9) return (uint32_t)(shift ? digits_s : digits)[code - KEY_1];
+    if (code == KEY_0)                  return (uint32_t)(shift ? digits_s : digits)[9];
+    switch (code) {
+    case KEY_MINUS:      return shift ? '_' : '-';
+    case KEY_EQUAL:      return shift ? '+' : '=';
+    case KEY_DOT:        return shift ? '>' : '.';
+    case KEY_COMMA:      return shift ? '<' : ',';
+    case KEY_SLASH:      return shift ? '?' : '/';
+    case KEY_BACKSLASH:  return shift ? '|' : '\\';
+    case KEY_SEMICOLON:  return shift ? ':' : ';';
+    case KEY_APOSTROPHE: return shift ? '"' : '\'';
+    case KEY_LEFTBRACE:  return shift ? '{' : '[';
+    case KEY_RIGHTBRACE: return shift ? '}' : ']';
+    case KEY_GRAVE:      return shift ? '~' : '`';
+    default:             return 0;
+    }
+}
+
 /* One keyboard event. Returns 1 if it counts as the person being present
  * (any key press), which is what cancels the auto-boot countdown. */
 static int kb_handle_event(const struct input_event *ev) {
@@ -3868,6 +4100,43 @@ static int kb_handle_event(const struct input_event *ev) {
     if (ev->code == KEY_LEFTSHIFT || ev->code == KEY_RIGHTSHIFT) { g_kb_shift = ev->value != 0; return 0; }
     if (ev->value == 0) return 0;                       /* release */
     enum nav_action a = nav_action_for_key(ev->code, g_kb_shift);
+    if (input_dbg()) fprintf(stderr, "nightfall: key code=%d value=%d shift=%d -> action=%d\n",
+                              ev->code, ev->value, g_kb_shift, (int)a);
+
+    /* With a textarea open, keys that produce or edit TEXT go to it and
+     * nowhere else - including three that otherwise mean something quite
+     * different: Space activates a button, Backspace is Escape, and
+     * Left/Right step between buttons. While typing, all of those have to
+     * be the text meaning instead, or the command line editor cannot type
+     * a space, delete a character, or move the cursor.
+     *
+     * Up/Down, Tab, Enter and Escape deliberately stay NAVIGATION even
+     * with a textarea open: they are how you leave the text and reach the
+     * dialog's own buttons (Use once / Save / Cancel). Enter in particular
+     * submits rather than inserting a newline - a kernel command line is
+     * one line by definition, so there is nothing a newline could mean. */
+    lv_obj_t *ta = active_textarea();
+    if (ta) {
+        uint32_t c = key_to_char(ev->code, g_kb_shift);
+        if (c) {
+            lv_obj_send_event(ta, LV_EVENT_KEY, &c);
+            /* Same reason splash_create() ends with one: this display is
+             * driven manually, so nothing else decides a repaint is due.
+             * lv_textarea invalidates itself on edit, which is enough when
+             * something is already pumping redraws - belt and braces here
+             * because a typed character that lands in the buffer but never
+             * reaches the panel is indistinguishable, from the keyboard,
+             * from a key that did nothing at all. */
+            lv_obj_invalidate(ta);
+            if (input_dbg())
+                fprintf(stderr, "nightfall: typed 0x%x into textarea, now '%.60s'\n",
+                        c, lv_textarea_get_text(ta));
+            return 1;
+        }
+    } else if (input_dbg()) {
+        fprintf(stderr, "nightfall: no active textarea - key goes to navigation\n");
+    }
+
     /* Held arrows repeat and should keep moving; a held Enter or Escape must
      * not fire the same button again and again. */
     if (ev->value == 2 && (a == NAV_ACTIVATE || a == NAV_ESCAPE)) return 1;
@@ -4185,7 +4454,6 @@ int main(int argc, char **argv) {
         struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
         while (ms_since(&t0) < 8000) usleep(50 * 1000);
     }
-
 
     /* Named initial_rot deliberately. It is only correct until the first
      * auto-rotate, and the live value lives in ctx.rot - so anything

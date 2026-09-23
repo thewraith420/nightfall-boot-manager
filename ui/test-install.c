@@ -713,8 +713,8 @@ int main(void) {
         struct input_event kev = { .type = EV_KEY };
 
         /* the key table */
-        ck(nav_action_for_key(KEY_DOWN, 0) == NAV_NEXT && nav_action_for_key(KEY_UP, 0) == NAV_PREV, "Down/Up move next/previous");
-        ck(nav_action_for_key(KEY_RIGHT, 0) == NAV_NEXT && nav_action_for_key(KEY_LEFT, 0) == NAV_PREV, "Right/Left follow, for the dialog button grids");
+        ck(nav_action_for_key(KEY_DOWN, 0) == NAV_DOWN && nav_action_for_key(KEY_UP, 0) == NAV_UP, "Down/Up are their own actions, not aliases of Right/Left");
+        ck(nav_action_for_key(KEY_RIGHT, 0) == NAV_NEXT && nav_action_for_key(KEY_LEFT, 0) == NAV_PREV, "Right/Left step through creation order, one at a time");
         ck(nav_action_for_key(KEY_TAB, 0) == NAV_NEXT && nav_action_for_key(KEY_TAB, 1) == NAV_PREV, "Tab goes forward and Shift+Tab back");
         ck(nav_action_for_key(KEY_ENTER, 0) == NAV_ACTIVATE && nav_action_for_key(KEY_KPENTER, 0) == NAV_ACTIVATE &&
            nav_action_for_key(KEY_SPACE, 0) == NAV_ACTIVATE, "Enter, keypad Enter and Space activate");
@@ -731,14 +731,28 @@ int main(void) {
         nav_do(NAV_ACTIVATE);
         ck(g_nav_focus == c[0] && ON_MAIN(), "Enter with nothing focused only SHOWS focus, it does not fire a button");
         nav_do(NAV_NEXT);
-        ck(g_nav_focus == c[1], "Down moves to the next row");
+        ck(g_nav_focus == c[1], "Right moves to the next row");
         nav_do(NAV_PREV); nav_do(NAV_PREV);
-        ck(g_nav_focus == c[n - 1], "Up from the first row wraps to the last");
+        ck(g_nav_focus == c[n - 1], "Left from the first row wraps to the last");
         nav_do(NAV_FIRST);
         ck(g_nav_focus == c[0], "Home goes to the first row");
         nav_do(NAV_LAST);
         ck(g_nav_focus == c[n - 1], "End goes to the last");
         ck(nav_do(NAV_ESCAPE) == 0, "Escape on the main menu (no Back row) does nothing");
+
+        /* Down/Up on a PLAIN LIST: one candidate per visual row, so this
+         * must behave exactly like Next/Prev - the one thing the whole
+         * row-width design promises not to change. */
+        nav_do(NAV_FIRST);
+        nav_do(NAV_DOWN);
+        ck(g_nav_focus == c[1], "on a plain list, Down moves exactly one row - same as Right");
+        nav_do(NAV_UP);
+        ck(g_nav_focus == c[0], "and Up moves back exactly one - same as Left");
+        nav_do(NAV_UP);
+        ck(g_nav_focus == c[0], "but unlike Left, Up does NOT wrap off the top of a list");
+        nav_do(NAV_LAST);
+        nav_do(NAV_DOWN);
+        ck(g_nav_focus == c[n - 1], "and Down does not wrap off the bottom either - it just stays, clamped");
 
         /* activating a row runs the same handler a tap does */
         nav_do(NAV_FIRST);
@@ -782,10 +796,193 @@ int main(void) {
         ck(n == 4, "with a dialog open only ITS four buttons are reachable, not the menu behind it");
         nav_do(NAV_NEXT);
         ck(g_nav_focus != behind && nav_index_of(c, n, g_nav_focus) >= 0, "focus left behind the dialog is dropped and moves into it");
+
+        /* The real hardware bug: this dialog is a genuine 2x2 grid (Edit,
+         * Set Default over Cancel, Boot). Right/Left step through creation
+         * order, which happens to also be row order for THIS dialog's two
+         * rows - so Right always looked correct even before row_width
+         * existed. Down did not: aliased to the same action as Right, it
+         * moved Edit -> Set Default (next in creation order) instead of
+         * Edit -> Cancel (next ROW), and could never reach Boot from Set
+         * Default at all. Asserted on the buttons' own text, not raw
+         * indices, so this fails loudly if the creation order in
+         * open_confirm_dialog ever changes without this being revisited. */
+        nav_do(NAV_FIRST);
+        ck(!strcmp(nav_button_text(g_nav_focus), "Edit"), "starts on Edit, top-left of the grid");
+        nav_do(NAV_DOWN);
+        ck(!strcmp(nav_button_text(g_nav_focus), "Cancel"), "Down from Edit reaches Cancel - the button BELOW it, not Set Default");
+        nav_do(NAV_UP);
+        ck(!strcmp(nav_button_text(g_nav_focus), "Edit"), "and Up from Cancel goes back to Edit");
+        nav_do(NAV_NEXT);
+        ck(!strcmp(nav_button_text(g_nav_focus), "Set Default"), "Right from Edit still moves along the top row");
+        nav_do(NAV_DOWN);
+        /* Cancel is ITS OWN full-width row here (this dialog has no
+         * Recovery button, the common case) - the row immediately below
+         * Edit/Set Default's shared row either one of them steps down
+         * into, same as Down from Edit did. Boot, one more row down
+         * still, is reached by pressing Down again below. */
+        ck(!strcmp(nav_button_text(g_nav_focus), "Cancel"), "and Down from Set Default reaches the very next row too, same Cancel Edit did");
+        nav_do(NAV_DOWN);
+        ck(!strcmp(nav_button_text(g_nav_focus), "Boot"), "one more Down reaches Boot, the row after that");
+        nav_do(NAV_DOWN);
+        ck(!strcmp(nav_button_text(g_nav_focus), "Boot"), "Down from the bottom row of the grid is clamped, not wrapped back to the top");
+
+        /* The focus ring has to actually WIN on every button, which is not
+         * automatic: Cancel and Boot carry a decorative 1px top divider set
+         * as LOCAL style properties, and in LVGL a local property beats a
+         * style added with lv_obj_add_style at the same selector. With the
+         * ring added as a shared style those two silently kept their 1px
+         * TOP border and never highlighted - exactly the two buttons that
+         * matter most, and exactly what Bob hit: "its a blind selection
+         * right now though i cant see what i'm on". Asserted on the
+         * COMPUTED border, so it fails if the ring ever stops winning. */
+        for (int i = 0; i < n; i++) {
+            nav_set_focus(c[i]);
+            int w = (int)lv_obj_get_style_border_width(c[i], LV_PART_MAIN);
+            int side = (int)lv_obj_get_style_border_side(c[i], LV_PART_MAIN);
+            ck(w == ui_px(8) && side == LV_BORDER_SIDE_FULL,
+               nav_button_text(c[i])[0] ? "the focus ring wins over a button's own local border decoration" : "focus ring applies");
+        }
+        /* ...and leaving a button puts ITS decoration back, rather than
+         * stripping the divider Cancel and Boot are drawn with. */
+        nav_set_focus(c[0]);
+        nav_set_focus(NULL);
+        {
+            int restored_any = 0;
+            for (int i = 0; i < n; i++)
+                if ((int)lv_obj_get_style_border_width(c[i], LV_PART_MAIN) == 1 &&
+                    (int)lv_obj_get_style_border_side(c[i], LV_PART_MAIN) == LV_BORDER_SIDE_TOP) restored_any++;
+            ck(restored_any == 2, "unfocusing restores each button's own decoration - Cancel and Boot get their divider back");
+        }
+
+        nav_do(NAV_FIRST);
         ck(nav_do(NAV_ESCAPE) == 1, "Escape finds the dialog's Cancel");
         PUMP();
         ck(lv_obj_get_child_count(lv_layer_top()) == 0, "and the dialog closes");
         nav_set_focus(NULL);
+
+        /* --- typing into a textarea with a REAL keyboard ---
+         * The on-screen keyboard every text dialog puts up is tap-driven;
+         * on hardware the physical keyboard did nothing at all, because
+         * every printable key resolves to NAV_NONE. Built as the same
+         * shape those dialogs use (a textarea plus an lv_keyboard bound to
+         * it on lv_layer_top()) rather than by driving edit_cb, so it
+         * tests the mechanism active_textarea() actually relies on. */
+        {
+            /* the pure key table first - no UI needed */
+            ck(key_to_char(KEY_A, 0) == 'a' && key_to_char(KEY_A, 1) == 'A', "letters, and Shift makes them upper case");
+            ck(key_to_char(KEY_1, 0) == '1' && key_to_char(KEY_1, 1) == '!', "digits, and their shifted symbols");
+            ck(key_to_char(KEY_0, 0) == '0' && key_to_char(KEY_0, 1) == ')', "zero sits at the END of the digit row, not the start");
+            ck(key_to_char(KEY_MINUS, 0) == '-' && key_to_char(KEY_MINUS, 1) == '_' &&
+               key_to_char(KEY_EQUAL, 0) == '=' && key_to_char(KEY_DOT, 0) == '.' &&
+               key_to_char(KEY_SLASH, 0) == '/', "the punctuation a kernel command line is actually made of");
+            ck(key_to_char(KEY_SPACE, 0) == ' ', "Space types a space");
+            ck(key_to_char(KEY_BACKSPACE, 0) == LV_KEY_BACKSPACE && key_to_char(KEY_DELETE, 0) == LV_KEY_DEL,
+               "Backspace and Delete map to LVGL's own editing codes");
+            ck(key_to_char(KEY_LEFT, 0) == LV_KEY_LEFT && key_to_char(KEY_RIGHT, 0) == LV_KEY_RIGHT,
+               "Left/Right move the cursor while typing");
+            ck(key_to_char(KEY_UP, 0) == 0 && key_to_char(KEY_DOWN, 0) == 0 && key_to_char(KEY_ENTER, 0) == 0 &&
+               key_to_char(KEY_ESC, 0) == 0 && key_to_char(KEY_TAB, 0) == 0,
+               "Up/Down/Enter/Escape/Tab are NOT typing keys - they stay navigation, to reach the dialog's buttons");
+
+            /* Drive the REAL Edit dialog rather than a hand-built stand-in:
+             * open the confirm dialog and activate its Edit button, which
+             * is what a person does, and what puts up the actual textarea,
+             * on-screen keyboard and footer buttons together. */
+            lv_obj_clean(lv_layer_top()); nav_set_focus(NULL);
+            open_confirm_dialog(0);
+            lv_obj_update_layout(lv_layer_top());
+            nav_candidates(c);
+            nav_do(NAV_FIRST);
+            ck(!strcmp(nav_button_text(g_nav_focus), "Edit"), "the confirm dialog's Edit button is reachable");
+            nav_do(NAV_ACTIVATE);
+            PUMP();
+            lv_obj_update_layout(lv_layer_top());
+
+            lv_obj_t *ta = active_textarea();
+            ck(ta != NULL, "activating Edit opens a textarea, found via the on-screen keyboard bound to it");
+
+            /* Guarded: every assertion below dereferences it, and a test
+             * that segfaults on a regression reports NOTHING - not even the
+             * suite's own tally. Fail the rest loudly instead. */
+            struct input_event tev = { .type = EV_KEY, .value = 1 };
+            if (!ta) {
+                ck(0, "SKIPPED (no textarea): typing into the edit dialog");
+            } else {
+            lv_textarea_set_text(ta, "");
+            tev.code = KEY_R; kb_handle_event(&tev);
+            tev.code = KEY_O; kb_handle_event(&tev);
+            ck(!strcmp(lv_textarea_get_text(ta), "ro"), "a real keypress types into the textarea instead of doing nothing");
+
+            /* The three that mean something DIFFERENT while typing. */
+            tev.code = KEY_SPACE; kb_handle_event(&tev);
+            ck(!strcmp(lv_textarea_get_text(ta), "ro "), "Space types a space rather than activating a button");
+            tev.code = KEY_BACKSPACE; kb_handle_event(&tev);
+            ck(!strcmp(lv_textarea_get_text(ta), "ro"), "Backspace deletes a character rather than acting as Escape");
+            nav_set_focus(NULL);
+            tev.code = KEY_LEFT; kb_handle_event(&tev);
+            ck(g_nav_focus == NULL, "Left moves the cursor rather than stepping between buttons");
+
+            /* ...and the ones that must NOT be swallowed by the textarea,
+             * or there is no way out of it to the dialog's own buttons.
+             * This is the case that found the nav_scope() bug: the
+             * on-screen keyboard is the LAST child of lv_layer_top() (it
+             * has to be, to draw above the backdrop), so taking the
+             * topmost child as the modal scope picked the KEYBOARD - a
+             * buttonmatrix with no button children - and left every text
+             * dialog with zero reachable candidates. */
+            int n_dlg = nav_candidates(c);
+            ck(n_dlg > 0, "the edit dialog's own buttons are reachable - the keyboard on top does not become the nav scope");
+            tev.code = KEY_DOWN; kb_handle_event(&tev);
+            ck(g_nav_focus != NULL, "Down still navigates - it is how you leave the text for the buttons");
+            }
+
+            lv_obj_clean(lv_layer_top());
+            ck(active_textarea() == NULL, "with the dialog gone, typing keys go back to navigation");
+            nav_set_focus(NULL);
+
+            /* With a REAL keyboard there should be no on-screen one at
+             * all: it costs 45% of the screen to duplicate a keyboard the
+             * person is already touching. Bob, on hardware: "the osk still
+             * showing up". Typing has to keep working without it, which is
+             * why the open textarea is tracked directly rather than looked
+             * up through the on-screen keyboard that may not exist. */
+            int saved_n = g_input_n;
+            g_input_n = 1;
+            g_inputs[0].kind = IN_KEYBOARD;
+            snprintf(g_inputs[0].name, sizeof(g_inputs[0].name), "fake-kbd");
+            ck(have_physical_keyboard() == 1, "a keyboard in the input list is what counts as having a real one");
+
+            lv_obj_clean(lv_layer_top()); nav_set_focus(NULL);
+            open_confirm_dialog(0);
+            lv_obj_update_layout(lv_layer_top());
+            nav_candidates(c);
+            nav_do(NAV_FIRST);
+            nav_do(NAV_ACTIVATE);
+            PUMP();
+            lv_obj_update_layout(lv_layer_top());
+
+            int osk = 0;
+            for (uint32_t i = 0; i < lv_obj_get_child_count(lv_layer_top()); i++)
+                if (lv_obj_check_type(lv_obj_get_child(lv_layer_top(), i), &lv_keyboard_class)) osk++;
+            ck(osk == 0, "no on-screen keyboard is put up when a real keyboard is present");
+
+            lv_obj_t *ta2 = active_textarea();
+            ck(ta2 != NULL, "the textarea is still found without an on-screen keyboard to find it through");
+            if (!ta2) {
+                ck(0, "SKIPPED (no textarea): the real keyboard still types into it");
+            } else {
+                lv_textarea_set_text(ta2, "");
+                tev.code = KEY_R; kb_handle_event(&tev);
+                tev.code = KEY_W; kb_handle_event(&tev);
+                ck(!strcmp(lv_textarea_get_text(ta2), "rw"), "and the real keyboard still types into it");
+            }
+            ck(nav_candidates(c) > 0, "the dialog's buttons stay reachable too");
+
+            lv_obj_clean(lv_layer_top());
+            nav_set_focus(NULL);
+            g_input_n = saved_n;
+        }
 
         /* the mouse */
         struct nightfall_ctx mc = { .rot = ROT_270, .cw = 600, .ch = 900 };
