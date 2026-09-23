@@ -721,11 +721,50 @@ struct nightfall_ctx {
     int touch_x, touch_y, touch_down;
 };
 
+/* TEMPORARY diagnostic, NIGHTFALL_DEBUG_INPUT only - bobzkernel-79 asked for
+ * two /proc/interrupts snapshots, one right as the menu appears and one
+ * right after the countdown expires (spanning the whole window a person
+ * would have been pressing keys), to tell apart two different real causes
+ * of "keyboard fd never shows POLLIN": if the IRQ's own count does not
+ * move between the two, the interrupt never reaches the CPU at all (an
+ * IOAPIC/interrupt-remap/EC-gating question, on the kernel side); if it
+ * DOES move but Nightfall still sees nothing, the break is downstream in
+ * the serio/evdev data path instead. Dumped verbatim rather than
+ * pre-filtered to i8042's own line, since which line is i8042's is itself
+ * part of what's being checked. Remove once that's answered. */
+static void dump_interrupts(const char *label) {
+    if (!getenv("NIGHTFALL_DEBUG_INPUT")) return;
+    FILE *f = fopen("/proc/interrupts", "r");
+    if (!f) { fprintf(stderr, "nightfall: /proc/interrupts (%s): open failed: %s\n", label, strerror(errno)); return; }
+    fprintf(stderr, "nightfall: --- /proc/interrupts (%s) ---\n", label);
+    char line[512];
+    while (fgets(line, sizeof(line), f)) fprintf(stderr, "nightfall: %s", line);
+    fprintf(stderr, "nightfall: --- end /proc/interrupts (%s) ---\n", label);
+    fclose(f);
+}
+
+/* TEMPORARY diagnostic, NIGHTFALL_DEBUG_FLUSH only - see main()'s
+ * NIGHTFALL_DEBUG_FILL comment for the hardware symptom this is chasing.
+ * The fill test proved raw writes into d->map reach the whole panel, so
+ * the question left is what LVGL actually asks THIS function to draw -
+ * every call, every early-exit, so a hardware boot can show it directly
+ * instead of guessing from what does or doesn't appear on screen. Remove
+ * once that's answered. */
+static int flush_dbg(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("NIGHTFALL_DEBUG_FLUSH") ? 1 : 0;
+    return v;
+}
+
 static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
     struct nightfall_ctx *ctx = lv_display_get_user_data(disp);
     struct drm_dev *d = ctx->drm;
     const int cw = ctx->cw, ch = ctx->ch;
     const int aw = area->x2 - area->x1 + 1;   /* source row stride */
+    const int dbg = flush_dbg();
+    if (dbg)
+        fprintf(stderr, "nightfall: flush called area=(%d,%d)-(%d,%d) rot=%d cw=%d ch=%d fb=%ux%u\n",
+                area->x1, area->y1, area->x2, area->y2, ctx->rot, cw, ch, d->width, d->height);
 
     /* Clamp once rather than bounds-testing every pixel. Given the
      * cw/ch invariant (they are the drm dimensions, swapped for 90/270)
@@ -735,7 +774,11 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
     const int y1 = area->y1 < 0 ? 0 : area->y1;
     const int x2 = area->x2 >= cw ? cw - 1 : area->x2;
     const int y2 = area->y2 >= ch ? ch - 1 : area->y2;
-    if (x1 > x2 || y1 > y2) { lv_display_flush_ready(disp); return; }
+    if (x1 > x2 || y1 > y2) {
+        if (dbg) fprintf(stderr, "nightfall: flush SKIPPED - degenerate area after clamp\n");
+        lv_display_flush_ready(disp);
+        return;
+    }
 
     /* The fast paths below drop the old per-pixel bounds test, which
      * is only safe while cw/ch really are the framebuffer dimensions
@@ -755,6 +798,7 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
             fprintf(stderr, "nightfall: display %dx%d does not match framebuffer %ux%u "
                             "for rotation - skipping flush\n", cw, ch, d->width, d->height);
         }
+        if (dbg) fprintf(stderr, "nightfall: flush SKIPPED - dimension mismatch\n");
         lv_display_flush_ready(disp);
         return;
     }
@@ -798,6 +842,58 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
             break;
         }
     }
+    /* Every write above lands straight in the buffer already bound to the
+     * CRTC by drmModeSetCrtc - never through a page flip, never through
+     * drmModeDirtyFB, for the whole life of this codebase. That has always
+     * been enough on the Slate's panel, which apparently keeps re-scanning
+     * the same buffer at its own fixed rate regardless. A 144Hz panel with
+     * variable refresh (this one is: intel_dp_set_edid logged "VRR capable:
+     * yes") has a real reason to behave differently - with no explicit
+     * "new frame" signal, a VRR-capable display can lock onto the last
+     * frame it was explicitly told about and simply stop re-reading the
+     * buffer, which would show exactly what real hardware showed: the very
+     * first paint (driven by drmModeSetCrtc's own modeset) lands, and nothing
+     * written after it - proven landing correctly in memory by
+     * NIGHTFALL_DEBUG_FLUSH's own trace - ever reaches the panel again.
+     * drmModeDirtyFB is the correct, standard way to say "this framebuffer's
+     * content changed" without a full modeset or page flip.
+     *
+     * A single logical redraw can span many chunks - up to 17 for a full
+     * screen at this buffer size - and flush_cb is called once per chunk.
+     * Calling drmModeDirtyFB per chunk means up to 17 ioctls (each one
+     * potentially waiting on the panel/AUX channel on a VRR display) for
+     * ONE frame's worth of change, which is exactly what made the first
+     * working version choppy compared to the Slate. Accumulate the dirty
+     * region instead and fire ONE call, covering everything written since
+     * the last one, right before the last chunk of the current refresh
+     * (lv_display_flush_is_last) - the display never needs to know about
+     * work still in flight, only about the complete result. */
+    {
+        static int have_dirty;
+        static int dx1, dy1, dx2, dy2;
+        if (!have_dirty) { dx1 = x1; dy1 = y1; dx2 = x2; dy2 = y2; have_dirty = 1; }
+        else {
+            if (x1 < dx1) dx1 = x1;
+            if (y1 < dy1) dy1 = y1;
+            if (x2 > dx2) dx2 = x2;
+            if (y2 > dy2) dy2 = y2;
+        }
+        if (lv_display_flush_is_last(disp) && d->fd >= 0) {
+            static int dirty_fb_unsupported;
+            if (!dirty_fb_unsupported) {
+                drmModeClip clip = {
+                    .x1 = (unsigned short)dx1, .y1 = (unsigned short)dy1,
+                    .x2 = (unsigned short)(dx2 + 1), .y2 = (unsigned short)(dy2 + 1),
+                };
+                int rc = drmModeDirtyFB(d->fd, d->fb_id, &clip, 1);
+                if (dbg) fprintf(stderr, "nightfall: drmModeDirtyFB (%d,%d)-(%d,%d) rc=%d%s\n",
+                                  dx1, dy1, dx2, dy2, rc, rc < 0 ? strerror(errno) : "");
+                if (rc < 0 && errno == ENOSYS) dirty_fb_unsupported = 1;
+            }
+            have_dirty = 0;
+        }
+    }
+    if (dbg) fprintf(stderr, "nightfall: flush OK, wrote y=%d..%d x=%d..%d\n", y1, y2, x1, x2);
     lv_display_flush_ready(disp);
 }
 
@@ -3913,6 +4009,33 @@ int main(int argc, char **argv) {
     }
     mark("display ready");
 
+    /* TEMPORARY diagnostic, NIGHTFALL_DEBUG_FILL only: a real hardware boot
+     * showed the splash freeze on its first frame and never update again,
+     * while a later, unrelated redraw (the main menu's header) DID reach
+     * the panel - a few dozen pixels near the top, nothing below it. That
+     * shape - SOME writes reach the screen, most don't, no crash, no DRM
+     * error anywhere in a full drm.debug=0x1e capture - doesn't distinguish
+     * "the kernel only scans out the top of this buffer" from "something
+     * in Nightfall's own redraw path stops after the first frame". This
+     * settles it with one boot: paint the ENTIRE dumb buffer solid red,
+     * outside LVGL entirely, and hold it. Whole screen red -> the bug is
+     * below this, in Nightfall/LVGL. Only a sliver red -> it's DRM/kernel
+     * scanout for this panel/mode, not anything in this codebase. Remove
+     * once that's answered - this is not meant to survive as a feature. */
+    if (getenv("NIGHTFALL_DEBUG_FILL")) {
+        for (uint32_t row = 0; row < drm.height; row++)
+            memset(drm.map + (size_t)row * drm.stride, 0, (size_t)drm.width * 4);
+        for (uint32_t row = 0; row < drm.height; row++) {
+            uint32_t *p = (uint32_t *)(drm.map + (size_t)row * drm.stride);
+            for (uint32_t col = 0; col < drm.width; col++) p[col] = 0x00FF0000; /* XRGB8888 red */
+        }
+        fprintf(stderr, "nightfall: NIGHTFALL_DEBUG_FILL - whole buffer painted solid red, "
+                        "holding 8s before continuing normally\n");
+        struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
+        while (ms_since(&t0) < 8000) usleep(50 * 1000);
+    }
+
+
     /* Named initial_rot deliberately. It is only correct until the first
      * auto-rotate, and the live value lives in ctx.rot - so anything
      * reaching for a bare "rot" later now fails to compile instead of
@@ -4045,6 +4168,7 @@ int main(int argc, char **argv) {
 
     lv_timer_handler();
     mark("menu drawn");
+    dump_interrupts("menu just appeared");
 
     struct pollfd fds[4 + MAX_INPUTS];
     long last_rescan_ms = 0;
@@ -4217,6 +4341,7 @@ int main(int argc, char **argv) {
             }
         }
     }
+    dump_interrupts("countdown expired / selection made");
 
     /* Booting a kernel: put up a booting screen and keep it through the
      * handoff, instead of exiting and letting the text console back while
