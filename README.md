@@ -180,10 +180,13 @@ Everything except the kernel builds **on the Slate itself** — the initramfs
 bundles the local libc, so a mismatch produces a picker that won't start.
 
 ```sh
-# 1. the picker kernel (in the BobZKernel repo, picker-kernel branch)
+# 1. the kernel. Either build it, or download a release:
+#      generic (Slate AND ordinary PCs)  BobZKernel nightfall-kernel branch
+#      https://github.com/thewraith420/BobZKernel/releases/tag/v7.2.7-nightfall
+#      Slate-only, frozen                BobZKernel picker-kernel branch
 cd BobZKernel && ./scripts/build-kernel-7.1.sh    # auto-selects config-7.1-picker
 
-# 2. the touch UI
+# 2. the UI (touch, keyboard, mouse or trackpad)
 cd nightfall-boot-manager/ui && ./fetch-lvgl.sh && make
 
 # 3. the initramfs (verifies itself at the end)
@@ -191,10 +194,25 @@ cd ../initramfs && ./build-initramfs.sh
 
 # 4. install + add the GRUB entry
 cd ../boot-integration
-sudo ./install-nightfall.sh /path/to/vmlinuz-picker ../initramfs/nightfall-initramfs.img
+sudo ./install-nightfall.sh /path/to/vmlinuz ../initramfs/nightfall-initramfs.img
 ```
 
 `install-nightfall.sh --uninstall` reverses it completely.
+
+**Check WHICH kernel you installed.** The installer prints the sha256 of the
+kernel and initramfs it just wrote; compare the kernel's against the
+`SHA256SUMS` on the release you meant to use:
+
+```sh
+sha256sum /boot/nightfall/vmlinuz
+```
+
+This is not ceremony. An install that is handed the wrong vmlinuz - or a
+script that "keeps the existing kernel" and silently carries a stale one
+forward - looks exactly like a working install until something misbehaves,
+and then every symptom gets blamed on the software. A Slate-only kernel rode
+along on a test machine for a full day that way, and was found only by
+checksumming the installed file by hand.
 
 ### Requirements on a machine other than the Slate
 

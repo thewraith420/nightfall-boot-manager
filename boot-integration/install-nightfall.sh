@@ -333,9 +333,18 @@ if [ "$grub_default" = picker ]; then
     fi
 fi
 
+# WHICH kernel, not just how big. A Slate-only picker-kernel image sat on a
+# test machine for a whole day because installs like this one keep whatever
+# vmlinuz they are handed and say nothing identifying about it - every
+# symptom got blamed on the kernel, and the wrong one was only found by
+# checksumming the installed file by hand. Printing the hash costs nothing
+# and is comparable against the kernel release's own SHA256SUMS.
+kernel_sum=$(sha256sum "$NIGHTFALL_DIR/vmlinuz" 2>/dev/null | cut -d" " -f1)
+initrd_sum=$(sha256sum "$NIGHTFALL_DIR/initramfs.img" 2>/dev/null | cut -d" " -f1)
+
 say "installed:"
-echo "    $NIGHTFALL_DIR/vmlinuz        ($(du -h "$NIGHTFALL_DIR/vmlinuz" | cut -f1))"
-echo "    $NIGHTFALL_DIR/initramfs.img  ($(du -h "$NIGHTFALL_DIR/initramfs.img" | cut -f1))"
+echo "    $NIGHTFALL_DIR/vmlinuz        ($(du -h "$NIGHTFALL_DIR/vmlinuz" | cut -f1))  sha256 ${kernel_sum:-(sha256sum unavailable)}"
+echo "    $NIGHTFALL_DIR/initramfs.img  ($(du -h "$NIGHTFALL_DIR/initramfs.img" | cut -f1))  sha256 ${initrd_sum:-(sha256sum unavailable)}"
 echo "    menu entry 'Nightfall Boot Manager' appended to $CUSTOM_CFG"
 echo
 echo "  grub.cfg was NOT regenerated and no existing entry moved."
