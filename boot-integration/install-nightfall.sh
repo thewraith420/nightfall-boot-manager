@@ -271,7 +271,7 @@ $BEGIN_MARK
 # This entry's id is 'nightfall'. Whether it is the DEFAULT is decided
 # by GRUB_DEFAULT in /etc/default/grub, not here: set it to 'nightfall'
 # to boot this without touching the menu, or to 0 for the first entry.
-menuentry 'Nightfall (touch)' --id nightfall {
+menuentry 'Nightfall Boot Manager' --id nightfall {
         insmod gzio
         insmod part_gpt
         insmod ext2
@@ -336,9 +336,9 @@ fi
 say "installed:"
 echo "    $NIGHTFALL_DIR/vmlinuz        ($(du -h "$NIGHTFALL_DIR/vmlinuz" | cut -f1))"
 echo "    $NIGHTFALL_DIR/initramfs.img  ($(du -h "$NIGHTFALL_DIR/initramfs.img" | cut -f1))"
-echo "    menu entry 'Nightfall (touch)' appended to $CUSTOM_CFG"
+echo "    menu entry 'Nightfall Boot Manager' appended to $CUSTOM_CFG"
 echo
 echo "  grub.cfg was NOT regenerated and no existing entry moved."
-echo "  Reboot and choose 'Nightfall (touch)' from the menu; every"
+echo "  Reboot and choose 'Nightfall Boot Manager' from the menu; every"
 echo "  normal entry still boots exactly as before. Undo at any time:"
 echo "    sudo $0 --uninstall"

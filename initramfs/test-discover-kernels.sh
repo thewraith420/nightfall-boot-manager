@@ -31,7 +31,7 @@ menuentry 'Ubuntu' --class ubuntu $1 {
 	linux	/boot/vmlinuz-6.8.0-generic root=UUID=aaa ro quiet
 	initrd	/boot/initrd.img-6.8.0-generic
 }
-menuentry 'Nightfall (touch)' $2 {
+menuentry 'Nightfall Boot Manager' $2 {
 	linux   $3
 	initrd  ${3%vmlinuz}initramfs.img
 }

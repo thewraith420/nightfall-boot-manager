@@ -76,7 +76,7 @@ setup picker yes; rc=$(run)
 [ "$rc" = 0 ] && ok "installs" || bad "failed: $(tail -3 "$SB/out")"
 cfg | grep -q "nocturne-boot-picker" && bad "left the old marked block behind" || ok "old block removed"
 cfg | grep -q "Boot Picker (touch)" && bad "left the old menu entry behind" || ok "old entry gone"
-cfg | grep -q "menuentry 'Nightfall (touch)' --id nightfall" && ok "new entry present with the new id" || bad "no new entry"
+cfg | grep -q "menuentry 'Nightfall Boot Manager' --id nightfall" && ok "new entry present with the new id" || bad "no new entry"
 [ "$(cfg | grep -c menuentry)" = 1 ] && ok "exactly ONE entry, not two" || bad "duplicate entries"
 
 echo "=== saved state carries over (silent loss otherwise) ==="
@@ -134,7 +134,7 @@ fresh_installed() {
   rm -rf "$SB/boot/picker" "$SB/boot/picker-default" "$SB/boot/picker-cmdline"
   cat > "$SB/boot/grub/custom.cfg" <<EOF
 ### BEGIN nightfall-boot-manager ###
-menuentry 'Nightfall (touch)' --id nightfall {
+menuentry 'Nightfall Boot Manager' --id nightfall {
         linux   /boot/nightfall/vmlinuz i915.enable_dpcd_backlight=2 i915.enable_psr=0
 }
 ### END nightfall-boot-manager ###
