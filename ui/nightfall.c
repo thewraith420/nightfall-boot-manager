@@ -662,7 +662,27 @@ static int touch_open(struct touch_dev *t) {
         }
 
         int is_direct = device_is_direct(fd);
-        int score = is_direct * 2 + is_mt;
+        /* INPUT_PROP_DIRECT is exactly the kernel's own signal for "this
+         * digitizer is fixed to the screen" (a touchscreen) vs "this
+         * reports absolute coordinates but is not the screen" (a
+         * touchpad). It was already read here and logged, but only fed
+         * into the SCORE - meaning with no genuinely direct candidate at
+         * all, a non-direct-but-multitouch device (a modern Precision
+         * Touchpad, say - confirmed on real hardware: an Elan touchpad
+         * enumerating with INPUT_PROP_DIRECT=no, multitouch=yes) could
+         * still win as "the best available", and get driven as if finger
+         * position mapped 1:1 onto the screen. It doesn't: a touchpad
+         * has no fixed relationship to the display at all, so every
+         * stroke landed at an unrelated absolute point with no cursor to
+         * show where - "unusable" was the accurate word for it. A
+         * touchpad's own genuinely relative sub-interface (this same
+         * Elan hardware also exposes one, confirmed in the same boot)
+         * already works fine as an ordinary mouse via classify_input()/
+         * IN_MOUSE - so this is not a case that needs a fallback,
+         * DIRECT is simply a real, hard requirement for anything called
+         * touch, never merely a tiebreaker. */
+        if (!is_direct) { close(fd); continue; }
+        int score = is_mt;
         if (score > found_score) {
             if (found_fd >= 0) close(found_fd);
             found_fd = fd;
@@ -750,6 +770,21 @@ static void dump_interrupts(const char *label) {
  * every call, every early-exit, so a hardware boot can show it directly
  * instead of guessing from what does or doesn't appear on screen. Remove
  * once that's answered. */
+/* TEMPORARY diagnostic, NIGHTFALL_DEBUG_INPUT only - first-ever hardware
+ * test of keyboard/mouse navigation (e70b290) found NOTHING responds once
+ * inside the actual menu, on real hardware that isn't touch at all. Logs
+ * every raw event this process actually reads from a keyboard/mouse fd,
+ * and what nav_action (if any) it resolved to - so the next boot's log
+ * says whether events are arriving at all, arriving with codes nothing
+ * maps, or arriving and mapping correctly but never having any visible
+ * effect (which would point back at rendering, not input). Remove once
+ * that's answered. */
+static int input_dbg(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("NIGHTFALL_DEBUG_INPUT") ? 1 : 0;
+    return v;
+}
+
 static int flush_dbg(void) {
     static int v = -1;
     if (v < 0) v = getenv("NIGHTFALL_DEBUG_FLUSH") ? 1 : 0;
@@ -3686,9 +3721,20 @@ static int nav_do(enum nav_action a) {
 
 /* ---- keyboards and mice as input sources ---- */
 
-enum { IN_KEYBOARD = 1, IN_MOUSE = 2 };
+enum { IN_KEYBOARD = 1, IN_MOUSE = 2, IN_TRACKPAD = 4 };
 #define MAX_INPUTS 16
-struct input_src { int fd; int kind; char name[32]; };
+/* code_x/code_y/abs_x/abs_y/last_x/last_y are IN_TRACKPAD-only: which ABS
+ * axes carry finger position, their reported range (to scale a physical
+ * sweep of the pad to a sensible sweep of the screen), and the last sample
+ * seen (-1 = none yet - a finger just went down, so the NEXT sample must
+ * not be diffed against a stale position from three fingers ago and turn
+ * into a random jump). */
+struct input_src {
+    int fd; int kind; char name[32];
+    int code_x, code_y;
+    struct input_absinfo abs_x, abs_y;
+    int last_x, last_y;
+};
 static struct input_src g_inputs[MAX_INPUTS];
 static int g_input_n;
 /* Every node already probed, kept or not, so the hot-plug rescan only opens
@@ -3706,14 +3752,46 @@ static int input_has(int fd, int type, int code) {
 /* A keyboard has to be able to navigate: Enter and both vertical arrows.
  * That excludes power buttons, lid switches and media-key nodes, which is
  * what keeps this from adopting devices the Slate already has. A mouse needs
- * relative X/Y and a left button; a touchpad reports absolute axes instead
- * and is left to the touch path. */
-static int classify_input(int fd) {
+ * relative X/Y and a left button.
+ *
+ * A touchpad reports absolute axes, like a touchscreen's digitizer does -
+ * the ONE bit that tells them apart is the same INPUT_PROP_DIRECT touch_open()
+ * itself now requires: a touchscreen's coordinates ARE the screen's, a
+ * touchpad's aren't related to it at all. Confirmed on real hardware: an
+ * Elan touchpad enumerating INPUT_PROP_DIRECT=no, multitouch=yes, which
+ * used to win touch_open()'s own selection with nothing genuinely direct
+ * competing for it - driven as if finger position mapped 1:1 onto the
+ * screen, which produced exactly what it looked like: a cursor jumping to
+ * an unrelated point on every stroke, with nothing shown to say where it
+ * would land. The SAME hardware's OWN separate "Mouse" companion node
+ * (there mainly for legacy PS/2-emulation userspace, not for a bare
+ * initramfs with no libinput) turned out to never actually emit a single
+ * real event on this kernel - confirmed on hardware: it satisfies every
+ * capability bit IN_MOUSE checks and NIGHTFALL_DEBUG_INPUT's own poll
+ * trace still shows zero activity on it for a whole boot of real trackpad
+ * use. So there is no working relative interface to fall back to here -
+ * the touchpad's own absolute reports are read directly instead, and
+ * turned into relative motion here rather than mapped onto the screen,
+ * which is the only way its coordinates make sense: a touchpad's origin
+ * is the corner of a small plastic pad on the case, not the corner of the
+ * display. code_x/code_y are returned via out-params because inputs_rescan()
+ * has to remember which axes to read from every later event - a plain kind
+ * bitmask has nowhere to carry that. */
+static int classify_input(int fd, int *code_x, int *code_y) {
     int kind = 0;
     if (input_has(fd, EV_KEY, KEY_ENTER) && input_has(fd, EV_KEY, KEY_UP) &&
         input_has(fd, EV_KEY, KEY_DOWN)) kind |= IN_KEYBOARD;
     if (input_has(fd, EV_REL, REL_X) && input_has(fd, EV_REL, REL_Y) &&
         input_has(fd, EV_KEY, BTN_LEFT)) kind |= IN_MOUSE;
+    if (!device_is_direct(fd) && input_has(fd, EV_KEY, BTN_LEFT)) {
+        int cx = -1, cy = -1;
+        if (input_has(fd, EV_ABS, ABS_MT_POSITION_X) && input_has(fd, EV_ABS, ABS_MT_POSITION_Y)) {
+            cx = ABS_MT_POSITION_X; cy = ABS_MT_POSITION_Y;
+        } else if (input_has(fd, EV_ABS, ABS_X) && input_has(fd, EV_ABS, ABS_Y)) {
+            cx = ABS_X; cy = ABS_Y;
+        }
+        if (cx >= 0) { kind |= IN_TRACKPAD; *code_x = cx; *code_y = cy; }
+    }
     return kind;
 }
 
@@ -3737,16 +3815,32 @@ static int inputs_rescan(void) {
         snprintf(path, sizeof(path), "/dev/input/%s", de->d_name);
         int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if (fd < 0) continue;
-        int kind = classify_input(fd);
+        int code_x = -1, code_y = -1;
+        int kind = classify_input(fd, &code_x, &code_y);
         if (!kind) { close(fd); continue; }
         char name[128] = "?";
         ioctl(fd, EVIOCGNAME(sizeof(name)), name);
-        fprintf(stderr, "nightfall: %s%s%s: %s (\"%s\")\n",
-                (kind & IN_KEYBOARD) ? "keyboard" : "", ((kind & IN_KEYBOARD) && (kind & IN_MOUSE)) ? "+" : "",
-                (kind & IN_MOUSE) ? "mouse" : "", path, name);
+        fprintf(stderr, "nightfall: %s%s%s%s%s: %s (\"%s\")\n",
+                (kind & IN_KEYBOARD) ? "keyboard" : "", ((kind & IN_KEYBOARD) && (kind & (IN_MOUSE | IN_TRACKPAD))) ? "+" : "",
+                (kind & IN_MOUSE) ? "mouse" : "", ((kind & IN_MOUSE) && (kind & IN_TRACKPAD)) ? "+" : "",
+                (kind & IN_TRACKPAD) ? "trackpad" : "", path, name);
         g_inputs[g_input_n].fd = fd;
         g_inputs[g_input_n].kind = kind;
         snprintf(g_inputs[g_input_n].name, sizeof(g_inputs[g_input_n].name), "%.31s", de->d_name);
+        if (kind & IN_TRACKPAD) {
+            g_inputs[g_input_n].code_x = code_x;
+            g_inputs[g_input_n].code_y = code_y;
+            /* Best-effort: a trackpad missing these still works, just at
+             * whatever raw-unit scale trackpad_handle_event()'s fallback
+             * uses instead of one tuned to this device's real range. */
+            struct input_absinfo ax = {0}, ay = {0};
+            ioctl(fd, EVIOCGABS(code_x), &ax);
+            ioctl(fd, EVIOCGABS(code_y), &ay);
+            g_inputs[g_input_n].abs_x = ax;
+            g_inputs[g_input_n].abs_y = ay;
+            g_inputs[g_input_n].last_x = -1;
+            g_inputs[g_input_n].last_y = -1;
+        }
         g_input_n++;
         added++;
     }
@@ -3833,6 +3927,63 @@ static int mouse_handle_event(struct nightfall_ctx *ctx, const struct input_even
         if (ev->code == REL_X) { *dx += ev->value; return 1; }
         if (ev->code == REL_Y) { *dy += ev->value; return 1; }
         if (ev->code == REL_WHEEL) { mouse_wheel(ev->value); return 1; }
+        return 0;
+    }
+    if (ev->type == EV_KEY && ev->code == BTN_LEFT) {
+        ctx->touch_down = ev->value != 0;
+        if (ev->value) mouse_cursor_show(ctx);
+        return ev->value != 0;
+    }
+    return 0;
+}
+
+/* A touchpad's absolute finger position, converted to relative motion and
+ * fed into the SAME dx/dy accumulator a real mouse uses - see
+ * classify_input()'s comment for why this exists instead of an
+ * absolute/touch mapping, or a relative device to defer to.
+ *
+ * Scaled by the device's own reported axis range against the screen's
+ * shorter side, so a full physical sweep of the pad crosses the screen a
+ * fixed, moderate number of times regardless of how big the pad or the
+ * panel are - there is no OS pointer-speed setting anywhere in this
+ * initramfs to read instead, so this is a plain documented constant. A
+ * device that reported no usable range (EVIOCGABS is best-effort; see
+ * inputs_rescan()) falls back to a fixed divisor rather than dividing by
+ * zero or producing a meaninglessly huge or tiny motion.
+ *
+ * last_x/last_y are reset on finger-up (ABS_MT_TRACKING_ID going to -1 for
+ * a multitouch pad, BTN_TOUCH release for a single-touch one) so the FIRST
+ * sample of the next touch is never diffed against a stale position left
+ * over from wherever the last finger happened to lift - that reads as a
+ * single large, unwanted jump exactly once per touch-down otherwise. */
+#define TRACKPAD_SWEEPS_PER_SCREEN 2
+static int trackpad_handle_event(struct nightfall_ctx *ctx, struct input_src *src,
+                                  const struct input_event *ev, int *dx, int *dy) {
+    if (ev->type == EV_ABS) {
+        if (ev->code == ABS_MT_TRACKING_ID) {
+            if (ev->value == -1) { src->last_x = -1; src->last_y = -1; }
+            return 0;
+        }
+        int is_x = (ev->code == src->code_x);
+        int is_y = !is_x && (ev->code == src->code_y);
+        if (!is_x && !is_y) return 0;
+        int range_x = src->abs_x.maximum - src->abs_x.minimum;
+        int range_y = src->abs_y.maximum - src->abs_y.minimum;
+        int pad_short = (range_x > 0 && range_y > 0) ? (range_x < range_y ? range_x : range_y) : 0;
+        int screen_short = ctx->cw < ctx->ch ? ctx->cw : ctx->ch;
+        int scale_den = pad_short > 0 ? pad_short * TRACKPAD_SWEEPS_PER_SCREEN : 8;
+        if (is_x) {
+            if (src->last_x >= 0) *dx += (ev->value - src->last_x) * screen_short / scale_den;
+            src->last_x = ev->value;
+        } else {
+            if (src->last_y >= 0) *dy += (ev->value - src->last_y) * screen_short / scale_den;
+            src->last_y = ev->value;
+        }
+        return 1;
+    }
+    if (ev->type == EV_KEY && ev->code == BTN_TOUCH && ev->value == 0) {
+        src->last_x = -1;
+        src->last_y = -1;
         return 0;
     }
     if (ev->type == EV_KEY && ev->code == BTN_LEFT) {
@@ -4182,6 +4333,16 @@ int main(int argc, char **argv) {
          * an unplugged one both happen after the events are read. */
         int in_base = nfds, nin = g_input_n;
         for (int i = 0; i < nin; i++) { fds[nfds].fd = g_inputs[i].fd; fds[nfds].events = POLLIN; nfds++; }
+        if (input_dbg()) {
+            static int last_nin = -1;
+            if (nin != last_nin) {
+                last_nin = nin;
+                fprintf(stderr, "nightfall: poll set now has %d keyboard/mouse fd(s):", nin);
+                for (int i = 0; i < nin; i++)
+                    fprintf(stderr, " fd=%d(%s)", g_inputs[i].fd, g_inputs[i].name);
+                fprintf(stderr, "\n");
+            }
+        }
         if (sig_fd >= 0) { fds[nfds].fd = sig_fd; fds[nfds].events = POLLIN; sig_idx = nfds++; }
         if (timer_fd >= 0) { fds[nfds].fd = timer_fd; fds[nfds].events = POLLIN; timer_idx = nfds++; }
         if (g_install_fd >= 0) { fds[nfds].fd = g_install_fd; fds[nfds].events = POLLIN; inst_idx = nfds++; }
@@ -4307,12 +4468,22 @@ int main(int argc, char **argv) {
             int dx = 0, dy = 0, present = 0, dead[MAX_INPUTS], nd = 0;
             for (int i = 0; i < nin; i++) {
                 if (!(fds[in_base + i].revents & (POLLIN | POLLERR | POLLHUP))) continue;
+                if (input_dbg())
+                    fprintf(stderr, "nightfall: poll fired fd=%d name=%s kind=%d revents=%d\n",
+                            g_inputs[i].fd, g_inputs[i].name, g_inputs[i].kind, fds[in_base + i].revents);
                 struct input_event ev;
                 ssize_t r;
                 while ((r = read(g_inputs[i].fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
-                    if (g_inputs[i].kind & IN_KEYBOARD) present |= kb_handle_event(&ev);
-                    if (g_inputs[i].kind & IN_MOUSE)    present |= mouse_handle_event(&ctx, &ev, &dx, &dy);
+                    if (input_dbg())
+                        fprintf(stderr, "nightfall: raw event type=%d code=%d value=%d (sizeof=%zu)\n",
+                                ev.type, ev.code, ev.value, sizeof(ev));
+                    if (g_inputs[i].kind & IN_KEYBOARD)  present |= kb_handle_event(&ev);
+                    if (g_inputs[i].kind & IN_MOUSE)     present |= mouse_handle_event(&ctx, &ev, &dx, &dy);
+                    if (g_inputs[i].kind & IN_TRACKPAD)  present |= trackpad_handle_event(&ctx, &g_inputs[i], &ev, &dx, &dy);
                 }
+                if (input_dbg() && r != (ssize_t)sizeof(ev))
+                    fprintf(stderr, "nightfall: read() returned %zd (errno=%d %s)\n",
+                            r, errno, strerror(errno));
                 if (r < 0 && errno != EAGAIN && errno != EINTR) dead[nd++] = i;
             }
             if (dx || dy) mouse_move(&ctx, dx, dy);

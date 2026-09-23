@@ -819,8 +819,74 @@ int main(void) {
         }
         {
             int nullfd = open("/dev/null", O_RDONLY);
-            ck(classify_input(nullfd) == 0, "a file that is not an input device is never adopted");
+            int cx = -1, cy = -1;
+            ck(classify_input(nullfd, &cx, &cy) == 0, "a file that is not an input device is never adopted");
             close(nullfd);
+        }
+        /* the trackpad - a touchpad's absolute reports converted to relative
+         * motion, since classify_input()/touch_open() together mean a
+         * non-direct multitouch device is never treated as touch and this
+         * is the only path left to make one usable at all (see the real
+         * hardware finding this whole feature is built on: an Elan
+         * touchpad reporting INPUT_PROP_DIRECT=no whose OWN separate
+         * "Mouse" companion node turned out to never emit a single real
+         * event on this kernel). */
+        {
+            struct nightfall_ctx tc = { .rot = ROT_270, .cw = 2000, .ch = 2000 };
+            struct input_src ts = { .code_x = ABS_MT_POSITION_X, .code_y = ABS_MT_POSITION_Y,
+                                     .abs_x = { .minimum = 0, .maximum = 1000 },
+                                     .abs_y = { .minimum = 0, .maximum = 1000 },
+                                     .last_x = -1, .last_y = -1 };
+            int dx = 0, dy = 0;
+            struct input_event tev = { .type = EV_ABS, .code = ABS_MT_POSITION_X, .value = 100 };
+            ck(trackpad_handle_event(&tc, &ts, &tev, &dx, &dy) == 1 && dx == 0,
+               "the first sample after a touch-down only records a position, no motion yet - nothing to diff against");
+            tev.value = 150;
+            trackpad_handle_event(&tc, &ts, &tev, &dx, &dy);
+            /* screen_short=2000, pad range=1000, TRACKPAD_SWEEPS_PER_SCREEN=2 -> scale is exactly 1:1 here */
+            ck(dx == 50, "a later sample is scaled by screen-vs-pad range - here a clean 1:1");
+            tev.code = ABS_MT_POSITION_Y; tev.value = 200;
+            trackpad_handle_event(&tc, &ts, &tev, &dx, &dy);
+            ck(dy == 0, "Y tracks its own axis independently, still no motion on its first sample");
+            tev.value = 220;
+            trackpad_handle_event(&tc, &ts, &tev, &dx, &dy);
+            ck(dy == 20, "and produces motion on the next one, same as X");
+
+            tev.type = EV_ABS; tev.code = ABS_MT_TRACKING_ID; tev.value = -1;
+            trackpad_handle_event(&tc, &ts, &tev, &dx, &dy);
+            ck(ts.last_x == -1 && ts.last_y == -1, "lifting the finger (tracking id -1) forgets the last position");
+            dx = dy = 0;
+            tev.code = ABS_MT_POSITION_X; tev.value = 900;
+            trackpad_handle_event(&tc, &ts, &tev, &dx, &dy);
+            ck(dx == 0, "so touching back down somewhere else does not read as one huge jump");
+
+            struct input_src ts_touch = { .code_x = ABS_X, .code_y = ABS_Y,
+                                           .abs_x = { .minimum = 0, .maximum = 1000 },
+                                           .abs_y = { .minimum = 0, .maximum = 1000 },
+                                           .last_x = 500, .last_y = 500 };
+            struct input_event bev = { .type = EV_KEY, .code = BTN_TOUCH, .value = 0 };
+            trackpad_handle_event(&tc, &ts_touch, &bev, &dx, &dy);
+            ck(ts_touch.last_x == -1 && ts_touch.last_y == -1,
+               "a single-touch pad (plain ABS_X/Y, no tracking id) resets on BTN_TOUCH release instead");
+
+            struct input_src ts_noscale = { .code_x = ABS_MT_POSITION_X, .code_y = ABS_MT_POSITION_Y,
+                                             .abs_x = { .minimum = 0, .maximum = 0 },
+                                             .abs_y = { .minimum = 0, .maximum = 0 },
+                                             .last_x = -1, .last_y = -1 };
+            dx = 0;
+            tev.value = 10;
+            trackpad_handle_event(&tc, &ts_noscale, &tev, &dx, &dy);
+            tev.value = 18;
+            trackpad_handle_event(&tc, &ts_noscale, &tev, &dx, &dy);
+            ck(dx == 2000, "a device with no usable reported range falls back to a fixed divisor, not a crash");
+
+            dx = 0; dy = 0;
+            struct input_event cev = { .type = EV_KEY, .code = BTN_LEFT, .value = 1 };
+            trackpad_handle_event(&tc, &ts, &cev, &dx, &dy);
+            ck(tc.touch_down == 1, "BTN_LEFT (a clickpad's physical click) presses, same as an ordinary mouse");
+            cev.value = 0;
+            trackpad_handle_event(&tc, &ts, &cev, &dx, &dy);
+            ck(tc.touch_down == 0, "and releases");
         }
         lv_obj_clean(lv_layer_top());
         show_main_menu();
