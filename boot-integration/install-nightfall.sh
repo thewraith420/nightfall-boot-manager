@@ -126,14 +126,21 @@ esac
 # the old options. Same rule as everywhere else here - check first, then
 # do the irreversible part.
 
-# The picker kernel needs the same panel quirks every other entry on
-# this machine already carries. Without i915.enable_dpcd_backlight=2 and
-# i915.enable_psr=0 the Slate's panel produces NO VISIBLE OUTPUT - and
-# it fails silently in the worst way: drmModeSetCrtc returns success, so
-# picker's own error handling has nothing to catch. Modeset works, the
-# backlight simply never lights. That cost a boot cycle where the entire
-# chain (root mount, discovery, DRM, touch, render, timeout, kexec) ran
-# perfectly against a black screen.
+# Nightfall needs the same panel quirks every other entry on this
+# machine already carries. On picker-kernel 7.1.12, without
+# i915.enable_dpcd_backlight=2 and i915.enable_psr=0, the Slate's panel
+# produced NO VISIBLE OUTPUT - and it failed silently in the worst way:
+# drmModeSetCrtc returns success, so Nightfall's own error handling has
+# nothing to catch. Modeset works, the backlight simply never lights.
+# That cost a boot cycle where the entire chain (root mount, discovery,
+# DRM, touch, render, timeout, kexec) ran perfectly against a black
+# screen.
+#
+# Whether it is still true on nightfall-kernel 7.2.7 is UNTESTED - that
+# kernel folds enable_psr=0 into a DMI quirk keyed on the board, and has
+# nothing corresponding to enable_dpcd_backlight. None of which changes
+# what this code should do: a silent black screen is expensive and the
+# options are free, so carry them.
 #
 # Rather than hardcode the quirks, take them from /proc/cmdline: the
 # running system is BY DEFINITION a working display configuration on

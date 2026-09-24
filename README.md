@@ -515,9 +515,15 @@ character devices.
 - **Touch is fully generic/mainline**: `intel_lpss_pci` → `i2c_designware` →
   `i2c_hid_acpi` → `hid_multitouch`, device `WCOM50C1` / `2D1F:486C`. No
   vendor blob.
-- **Graphics is `i915`** (Intel UHD 615). The panel needs
-  `i915.enable_dpcd_backlight=2 i915.enable_psr=0` or it produces no visible
-  output.
+- **Graphics is `i915`** (Intel UHD 615). On the original picker kernel
+  (7.1.12) the panel produced no visible output without
+  `i915.enable_dpcd_backlight=2 i915.enable_psr=0` — observed, not guessed,
+  at the cost of a boot cycle. Whether that still holds on the generic
+  nightfall kernel (7.2.7) is **untested**: `enable_psr=0` is folded into a
+  built-in DMI quirk there, so the Slate gets it with or without the option,
+  and `enable_dpcd_backlight=2` has no counterpart in the source. Both are
+  still passed, because the installer derives them from the running boot and
+  they cost nothing — not because the panel is known to be dark without them.
 - **Display is 3000x2000 at ~293 PPI**, mounted rotated — `NIGHTFALL_ROTATE=270`
   is upright. Touch targets are sized in real-world units off that DPI
   (~1cm buttons), because the theme's own defaults come out around 1mm.
