@@ -1,8 +1,10 @@
 # Nightfall Boot Manager
 
-A touch-driven boot manager for the Google Pixel Slate (`nocturne`), TWRP-style —
-replacing GRUB's mouse/keyboard-only menu with something you can actually use
-on a tablet with no keyboard attached.
+A boot manager you can actually drive, TWRP-style — replacing GRUB's
+mouse/keyboard-only menu with one that takes touch, a keyboard, a mouse or a
+trackpad. Built for the Google Pixel Slate (`nocturne`), where there is no
+keyboard attached to drive GRUB with; it now runs on ordinary PCs too, from
+the same build.
 
 **Status: working end-to-end on real hardware, with nothing shipped left
 unexercised.** Tap a kernel, confirm, and it `kexec`s straight into it. Every
@@ -219,6 +221,14 @@ checksumming the installed file by hand.
 Nightfall started as a Slate-only tool and is being widened, so this is the
 honest list of what a different machine has to satisfy today. Anything not on
 it is not supported yet.
+
+**What has actually run on real hardware**, as opposed to building and
+passing tests: the Slate (`nocturne`) and one Alder Lake-P laptop, both on
+the same generic kernel - touch on the Slate, keyboard/trackpad on the
+laptop. **Not yet tried on any real machine**: AMD anything, other Intel
+generations, NVMe or AHCI as the *root* disk, BIOS (non-UEFI) boot, and the
+grub2/BLS discovery paths that Fedora and openSUSE need. Those are written
+and tested in the harness; they have simply never met the hardware.
 
 - **Secure Boot must be OFF.** This is a decision, not an oversight: there is
   no signing work planned. The reason is simple - the Nightfall kernel is a
