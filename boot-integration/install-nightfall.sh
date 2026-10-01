@@ -126,8 +126,8 @@ esac
 # the old options. Same rule as everywhere else here - check first, then
 # do the irreversible part.
 
-# Nightfall needs the same panel quirks every other entry on this
-# machine already carries. On picker-kernel 7.1.12, without
+# Nightfall carries whatever panel quirks the entry it was installed
+# from already needed. On picker-kernel 7.1.12, without
 # i915.enable_dpcd_backlight=2 and i915.enable_psr=0, the Slate's panel
 # produced NO VISIBLE OUTPUT - and it failed silently in the worst way:
 # drmModeSetCrtc returns success, so Nightfall's own error handling has
@@ -136,11 +136,18 @@ esac
 # DRM, touch, render, timeout, kexec) ran perfectly against a black
 # screen.
 #
-# Whether it is still true on nightfall-kernel 7.2.7 is UNTESTED - that
-# kernel folds enable_psr=0 into a DMI quirk keyed on the board, and has
-# nothing corresponding to enable_dpcd_backlight. None of which changes
-# what this code should do: a silent black screen is expensive and the
-# options are free, so carry them.
+# CONFIRMED 2026-09-30: on nightfall-kernel 7.2.7, with this Slate's
+# current coreboot firmware, both are now redundant rather than merely
+# untested. enable_psr=0 is a no-op - kernel patch 9208 applies the same
+# PSR-disable itself, via a DMI quirk. enable_dpcd_backlight=2 reaches
+# the exact code path AUTO already does, because coreboot's own VBT
+# (BDB 221, panel_type 15) already selects VESA_EDP_AUX_INTERFACE as
+# this panel's backlight method - read from the live vbt.bin, not
+# inferred. That is a property of THIS firmware build, not a general
+# rule: a different coreboot VBT could pick a different default for the
+# same panel_type, which is exactly why the flags existed. Hence no
+# hardcoding either way, below - carry forward whatever the running
+# boot's cmdline actually has, same as always.
 #
 # Rather than hardcode the quirks, take them from /proc/cmdline: the
 # running system is BY DEFINITION a working display configuration on
@@ -177,8 +184,12 @@ NIGHTFALL_QUIET_ARGS="quiet loglevel=3 vt.global_cursor_default=0"
 
 PROC_CMDLINE=${NIGHTFALL_PROC_CMDLINE:-/proc/cmdline}
 override_hint="  If you are sure, say explicitly what to use - note sudo's placement:
-    sudo NIGHTFALL_CMDLINE='i915.enable_dpcd_backlight=2 i915.enable_psr=0' $0 ...
-  (NIGHTFALL_CMDLINE=... sudo ... loses the variable: sudo resets the environment.)"
+    sudo NIGHTFALL_CMDLINE='i915.your_flag=value' $0 ...
+  (NIGHTFALL_CMDLINE=... sudo ... loses the variable: sudo resets the environment.)
+  Not sure what belongs there? Don't reach for the Slate's old
+  i915.enable_dpcd_backlight=2/enable_psr=0 by habit - on nightfall-kernel
+  7.2.7 with current firmware neither is needed any more (see the comment
+  above this check). Copy whatever your OWN working boot's cmdline has."
 
 if [ -n "${NIGHTFALL_CMDLINE+x}" ]; then
     nightfall_cmdline=$NIGHTFALL_CMDLINE

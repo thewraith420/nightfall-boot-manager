@@ -333,7 +333,7 @@ configuration on this hardware, so whatever lights the panel now is carried
 across. Override with `NIGHTFALL_CMDLINE=...` — and put it **after** `sudo`:
 
 ```sh
-sudo NIGHTFALL_CMDLINE='i915.enable_dpcd_backlight=2 i915.enable_psr=0' ./install-nightfall.sh ...
+sudo NIGHTFALL_CMDLINE='i915.your_flag=value' ./install-nightfall.sh ...
 ```
 
 `NIGHTFALL_CMDLINE=... sudo ./install-nightfall.sh` looks equivalent and is not:
@@ -518,12 +518,18 @@ character devices.
 - **Graphics is `i915`** (Intel UHD 615). On the original picker kernel
   (7.1.12) the panel produced no visible output without
   `i915.enable_dpcd_backlight=2 i915.enable_psr=0` — observed, not guessed,
-  at the cost of a boot cycle. Whether that still holds on the generic
-  nightfall kernel (7.2.7) is **untested**: `enable_psr=0` is folded into a
-  built-in DMI quirk there, so the Slate gets it with or without the option,
-  and `enable_dpcd_backlight=2` has no counterpart in the source. Both are
-  still passed, because the installer derives them from the running boot and
-  they cost nothing — not because the panel is known to be dark without them.
+  at the cost of a boot cycle. **Confirmed 2026-09-30: on the nightfall
+  kernel (7.2.7), with this Slate's current coreboot firmware, both are
+  redundant, not just untested.** `enable_psr=0` is a no-op — kernel patch
+  9208 applies the same PSR-disable itself, via a DMI quirk. And
+  `enable_dpcd_backlight=2` reaches the exact code path `AUTO` already
+  takes, because coreboot's own VBT (BDB 221, panel_type 15) already
+  selects `VESA_EDP_AUX_INTERFACE` as this panel's backlight method —
+  read from the live `vbt.bin`, not inferred. That's a property of this
+  firmware build specifically: a different coreboot VBT could pick a
+  different default for the same panel_type, which is exactly why the
+  flags existed. The installer no longer forces either — it just carries
+  forward whatever the running boot's cmdline actually has, same as always.
 - **Display is 3000x2000 at ~293 PPI**, mounted rotated — `NIGHTFALL_ROTATE=270`
   is upright. Touch targets are sized in real-world units off that DPI
   (~1cm buttons), because the theme's own defaults come out around 1mm.
