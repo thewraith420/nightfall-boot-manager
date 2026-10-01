@@ -392,6 +392,18 @@ fi
 discover_kernels() {
     : > /run/nightfall/menu.tsv.raw
     /bin/discover-kernels.sh "$BOOTDIR/grub/grub.cfg" > /run/nightfall/menu.tsv.raw 2>/dev/null || :
+    # grub.cfg's `source .../custom.cfg` is a runtime directive, not an
+    # include - GRUB never inlines custom.cfg's text into grub.cfg, so a
+    # menuentry that lives only in custom.cfg is invisible to the parser
+    # above. That includes Nightfall's OWN entry: install-nightfall.sh
+    # deliberately writes it to custom.cfg, which made the --id
+    # nightfall/picker self-exclusion in discover-kernels.sh dead code on
+    # every distro that works this way (confirmed on the Slate). Parse
+    # custom.cfg too, when grub.cfg actually sources it, so both a user's
+    # own custom.cfg entries and the self-exclusion are real.
+    if [ -r "$BOOTDIR/grub/custom.cfg" ] && grep -q 'custom\.cfg' "$BOOTDIR/grub/grub.cfg" 2>/dev/null; then
+        /bin/discover-kernels.sh "$BOOTDIR/grub/custom.cfg" >> /run/nightfall/menu.tsv.raw 2>/dev/null || :
+    fi
     [ -s /run/nightfall/menu.tsv.raw ] && return 0
     if [ -r "$BOOTDIR/grub2/grub.cfg" ]; then
         /bin/discover-kernels.sh "$BOOTDIR/grub2/grub.cfg" > /run/nightfall/menu.tsv.raw 2>/dev/null || :

@@ -1026,6 +1026,42 @@ setup happy ok 0 0; grub2_present; kernel_mocks nothing; run
 both | grep -q "MARKER_RESCUE_SHELL_REACHED" && ok "no kernels from ANY source still goes to rescue" || bad "did not reach rescue"
 both | grep -q "no usable grub/grub.cfg, grub2/grub.cfg or loader/entries" && ok "and the message names everything that was tried" || bad "message: $(both | grep -i 'no kernel')"
 
+echo "=== 26b. grub.cfg's 'source custom.cfg' is a runtime directive, not an include ==="
+# GRUB never inlines custom.cfg's text into grub.cfg - it's a separate file
+# read at GRUB's own boot time - so a menuentry that lives only in
+# custom.cfg (a user's own, or Nightfall's own, which install-nightfall.sh
+# deliberately writes there) was invisible to discover-kernels.sh. Found on
+# the Slate. These exercise init's own decision to ALSO hand custom.cfg to
+# the parser, not the parser itself (discover-kernels.sh's self-exclusion
+# logic is covered in test-discover-kernels.sh).
+custom_mocks() {
+  cat > "$SB/bin/discover-kernels.sh" <<MOCK
+#!/bin/sh
+echo "\$1" >> "$SB/dk-args"
+case "\$1" in
+  *grub/custom.cfg) printf 'My Custom Entry\t/boot/vmlinuz-custom\t/boot/initrd.img-custom\tro quiet\t\n' ;;
+  *) exit 1 ;;
+esac
+MOCK
+  chmod +x "$SB/bin/discover-kernels.sh"
+}
+sourced_grubcfg()   { mkdir -p "$SB/mnt/root/boot/grub"; printf 'source ${config_directory}/custom.cfg\n' > "$SB/mnt/root/boot/grub/grub.cfg"; }
+unsourced_grubcfg() { mkdir -p "$SB/mnt/root/boot/grub"; printf 'menuentry "Ubuntu" {}\n'                 > "$SB/mnt/root/boot/grub/grub.cfg"; }
+have_customcfg()    { : > "$SB/mnt/root/boot/grub/custom.cfg"; }
+
+setup happy ok 0 0; sourced_grubcfg; have_customcfg; custom_mocks; run
+[ "$(dkargs)" = "$SB/mnt/root/boot/grub/grub.cfg $SB/mnt/root/boot/grub/custom.cfg " ] \
+  && ok "grub.cfg sourcing custom.cfg means custom.cfg is parsed too" || bad "args: $(dkargs)"
+both | grep -q "MARKER_KEXEC" && ok "and its entries are reachable (would otherwise be invisible forever)" || bad "did not boot from custom.cfg"
+
+setup happy ok 0 0; unsourced_grubcfg; have_customcfg; custom_mocks; run
+[ "$(dkargs)" = "$SB/mnt/root/boot/grub/grub.cfg " ] \
+  && ok "custom.cfg is left alone when grub.cfg never references it, even if it exists" || bad "args: $(dkargs)"
+
+setup happy ok 0 0; sourced_grubcfg; custom_mocks; run
+[ "$(dkargs)" = "$SB/mnt/root/boot/grub/grub.cfg " ] \
+  && ok "custom.cfg is skipped when it does not exist, even though grub.cfg sources it" || bad "args: $(dkargs)"
+
 echo "=== a separate /boot partition: the boot files are at the top of it ==="
 # $1 = the layout word the finder reports ("" = a bare device, like an older finder)
 finder_reporting() {
