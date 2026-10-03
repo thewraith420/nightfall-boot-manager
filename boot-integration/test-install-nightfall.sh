@@ -210,6 +210,42 @@ fresh_installed; echo "ro quiet i915.enable_psr=0" > "$SB/cmdline"; rc=$(run)
 [ "$rc" = 0 ] && ok "fewer options than before (after a revert)" || bad "refused a revert"
 entry_opts | grep -q "enable_dpcd_backlight" && bad "kept an option the running boot dropped" || ok "and the entry follows the running boot"
 
+echo "=== a bare boot that IS this kernel's saved override is deliberate, not a one-off edit ==="
+# The Slate runs 7.2.8 bare on purpose: its per-kernel override in
+# nightfall-cmdline carries no i915 options. Refusing that forever means
+# every update fails. Carry it forward - but only when the boot really is
+# that saved line, and only for the running kernel.
+fresh_installed
+export NIGHTFALL_KERNEL_RELEASE=7.2.8-BobZKernel-pixel-slate
+printf '/boot/vmlinuz-7.2.8-BobZKernel-pixel-slate\troot=x ro quiet splash\n' > "$SB/boot/nightfall-cmdline"
+echo "BOOT_IMAGE=/boot/vmlinuz-7.2.8-BobZKernel-pixel-slate root=x ro quiet splash" > "$SB/cmdline"
+rc=$(run)
+[ "$rc" = 0 ] && ok "installs when the bare boot matches the saved override for this kernel" || bad "refused a deliberate bare boot: $(tail -3 "$SB/out")"
+[ -z "$(entry_opts)" ] && ok "and the entry carries no i915 options, as intended" || bad "still carrying: $(entry_opts)"
+grep -q "deliberate" "$SB/out" && ok "and says why it dropped them" || bad "silent about dropping the options"
+
+fresh_installed
+export NIGHTFALL_KERNEL_RELEASE=7.2.8-BobZKernel-pixel-slate
+printf '/boot/vmlinuz-7.2.8-BobZKernel-pixel-slate\troot=x ro quiet splash\n' > "$SB/boot/nightfall-cmdline"
+echo "root=x ro quiet" > "$SB/cmdline"
+rc=$(run)
+[ "$rc" != 0 ] && ok "still refuses a bare boot that DIFFERS from the saved override (a one-off edit)" || bad "accepted a one-off edit as deliberate"
+
+fresh_installed
+export NIGHTFALL_KERNEL_RELEASE=7.2.8-BobZKernel-pixel-slate
+printf '/boot/vmlinuz-7.1.1-other\troot=x ro quiet splash\n' > "$SB/boot/nightfall-cmdline"
+echo "root=x ro quiet splash" > "$SB/cmdline"
+rc=$(run)
+[ "$rc" != 0 ] && ok "a saved override for a DIFFERENT kernel does not vouch for this one" || bad "matched another kernel's override"
+
+fresh_installed
+export NIGHTFALL_KERNEL_RELEASE=7.2.8-BobZKernel-pixel-slate
+echo "root=x ro quiet splash" > "$SB/cmdline"
+rc=$(run)
+[ "$rc" != 0 ] && ok "no saved override file at all still refuses" || bad "bare boot with no override accepted"
+grep -q "reboot normally" "$SB/out" && bad "still tells the user to reboot normally" || ok "and no longer advises rebooting normally, which cannot help a saved override"
+unset NIGHTFALL_KERNEL_RELEASE
+
 fresh_installed
 echo "BOOT_IMAGE=/boot/vmlinuz-x ro recovery nomodeset" > "$SB/cmdline"
 rc=$(RUN_CMDLINE="i915.enable_psr=0" run)

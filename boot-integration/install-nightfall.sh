@@ -191,6 +191,29 @@ override_hint="  If you are sure, say explicitly what to use - note sudo's place
   7.2.7 with current firmware neither is needed any more (see the comment
   above this check). Copy whatever your OWN working boot's cmdline has."
 
+# The saved per-kernel command line for the RUNNING kernel, if one exists.
+# Keyed the way apply-cmdline.sh and the fixer key it: by the
+# /boot/vmlinuz-<release> suffix, last line wins, empty values ignored.
+# NIGHTFALL_KERNEL_RELEASE is a test seam; normally this is uname -r.
+saved_override_for_running() {
+    rel=${NIGHTFALL_KERNEL_RELEASE:-$(uname -r 2>/dev/null || true)}
+    [ -n "$rel" ] && [ -f "$BOOT/nightfall-cmdline" ] || return 0
+    awk -F'\t' -v suffix="/vmlinuz-$rel" '
+        $2 != "" {
+            k = $1
+            if (length(k) >= length(suffix) && substr(k, length(k) - length(suffix) + 1) == suffix)
+                v = $2
+        }
+        END { if (v != "") print v }' "$BOOT/nightfall-cmdline"
+}
+
+# Two command lines are the same if they match after collapsing whitespace
+# and dropping the BOOT_IMAGE= token GRUB adds to /proc/cmdline.
+same_cmdline() {
+    norm() { printf '%s\n' "$1" | sed 's/BOOT_IMAGE=[^ ]* //; s/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'; }
+    [ "$(norm "$1")" = "$(norm "$2")" ]
+}
+
 if [ -n "${NIGHTFALL_CMDLINE+x}" ]; then
     nightfall_cmdline=$NIGHTFALL_CMDLINE
     say "using NIGHTFALL_CMDLINE from the environment"
@@ -215,10 +238,26 @@ $override_hint" ;;
         existing=$(sed -n "/$BEGIN_MARK/,/$END_MARK/p; /$OLD_BEGIN_MARK/,/$OLD_END_MARK/p" "$CUSTOM_CFG" \
                    | grep -E '^[[:space:]]*linux[[:space:]]' | tr ' \t' '\n\n' | grep '^i915\.' \
                    | tr '\n' ' ' | sed 's/ *$//')
-        [ -z "$existing" ] || die "this boot has no i915 options, but the current Nightfall
-  entry has: $existing
-  Replacing them with nothing would very likely leave Nightfall dark.
+        if [ -n "$existing" ]; then
+            # A bare boot is only a one-off edit if nothing says otherwise.
+            # If this kernel has a SAVED per-kernel override in nightfall-cmdline
+            # and this boot IS that override, the bare line is a deliberate,
+            # persistent choice - carry it forward rather than refuse forever.
+            saved=$(saved_override_for_running)
+            if [ -n "$saved" ] && same_cmdline "$running" "$saved"; then
+                say "this boot's command line is this kernel's saved override in $BOOT/nightfall-cmdline -"
+                say "a deliberate, persistent choice, not a one-off edit - so carrying it forward as-is"
+                say "(the i915 options are dropped; the current Nightfall entry had: $existing)"
+            else
+                die "this boot has no i915 options, but the current Nightfall entry has:
+  $existing
+  This boot's command line is not this kernel's saved override either, so
+  nothing says a bare command line is what Nightfall should carry. Replacing
+  the options with nothing could leave Nightfall dark. Pass NIGHTFALL_CMDLINE
+  explicitly to say what it should carry, then re-run.
 $override_hint"
+            fi
+        fi
     fi
 fi
 
