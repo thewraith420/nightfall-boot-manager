@@ -30,6 +30,14 @@ rc=0; out=$(sh "$SCRIPT" "$SB" /boot/vmlinuz-5.16 2>&1) || rc=$?
 printf '/boot/vmlinuz-5.17\n' > "$SB/var/lib/dpkg/info/linux-image-5.17-generic:amd64.list"
 out=$(sh "$SCRIPT" "$SB" /boot/vmlinuz-5.17)
 [ "$out" = "linux-image-5.17-generic" ] && ok "a multi-arch :amd64.list reports the bare package name" || bad "got: $out"
+# A plain `dpkg --remove` (not --purge) truncates the package's .list to
+# 0 bytes rather than leaving it intact - confirmed against the Slate's
+# real dpkg state, not assumed. Correct behaviour to match: once removed,
+# dpkg no longer claims those paths, so this must report unowned, not
+# crash or stay stuck on a stale entry.
+: > "$SB/var/lib/dpkg/info/linux-image-5.18-generic.list"
+rc=0; out=$(sh "$SCRIPT" "$SB" /boot/vmlinuz-5.18 2>&1) || rc=$?
+[ "$rc" = 1 ] && [ -z "$out" ] && ok "an emptied .list (a removed-not-purged package) is unowned" || bad "rc=$rc out=[$out]"
 rm -rf "$SB/var/lib/dpkg"
 
 echo "=== pacman ==="
