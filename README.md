@@ -664,8 +664,9 @@ accumulate NVRAM clutter.
 > same way every other shell script here is, but nobody has armed a real
 > `BootNext` from it yet.
 
-**Boot a specific ISO** (`Boot → Boot a specific ISO on a drive`, formerly
-`Back up / Restore → Boot a live USB` until 2026-10-03) is the earlier,
+**Boot a specific ISO** (`Boot → Boot ISO`, formerly `Back up / Restore →
+Boot a live USB` until 2026-10-03, briefly `Boot a specific ISO on a
+drive` before that) is the earlier,
 narrower answer to the same problem, kept as a secondary option rather than
 removed: loop-mount a `.iso` file as `iso9660` and `kexec` straight into the
 kernel and initrd found inside it, the same trick GRUB+Ventoy use to boot an

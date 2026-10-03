@@ -3336,7 +3336,7 @@ static void show_kernel_list(void) {
 
     for (int i = 0; i < g_bootable_n; i++) {
         char row[220];
-        snprintf(row, sizeof(row), "%.40s   %.10s   hands off to firmware",
+        snprintf(row, sizeof(row), "Boot Drive: %.30s   %.10s",
                  g_bootable[i].label[0] ? g_bootable[i].label : g_bootable[i].dev,
                  g_bootable[i].size);
         lv_obj_t *b = make_row(LV_SYMBOL_DRIVE, row, 0);
@@ -3346,14 +3346,15 @@ static void show_kernel_list(void) {
     /* Deliberately NOT worded like the rows above: those hand the WHOLE
      * drive to firmware (a Ventoy stick still shows its own menu). This
      * kexecs Nightfall straight into ONE specific .iso file's own
-     * kernel+initrd, no firmware reboot involved - "a specific ISO" is
-     * the whole point of the wording, so it can't be mistaken for the
-     * row above it. Same reused drive list as Back up/Restore, for the
-     * same reason that menu's own row used to: the drive cannot be
-     * present at boot, so Rescan above is how it gets here either way. */
+     * kernel+initrd, no firmware reboot involved - "Boot ISO" next to
+     * "Boot Drive" is the whole point of the wording, so it can't be
+     * mistaken for the row above it. Same reused drive list as Back
+     * up/Restore, for the same reason that menu's own row used to: the
+     * drive cannot be present at boot, so Rescan above is how it gets
+     * here either way. */
     {
-        char row[96];
-        snprintf(row, sizeof(row), "Boot a specific ISO on a drive   (%d drive%s found)",
+        char row[64];
+        snprintf(row, sizeof(row), "Boot ISO   (%d drive%s found)",
                  g_target_n, g_target_n == 1 ? "" : "s");
         lv_obj_t *b = make_row(LV_SYMBOL_USB, row, g_target_n == 0);
         lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_live_boot_targets);
