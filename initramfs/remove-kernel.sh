@@ -20,7 +20,16 @@
 #      runnable by hand, where it matters a great deal.
 #   3. The kernel must actually be there, so a typo fails loudly rather
 #      than "succeeding" having deleted nothing.
-#   4. The chroot must be able to resolve the root device BEFORE anything
+#   4. A package manager must not still own it. rm-ing a distro kernel
+#      (e.g. linux-image-X on Debian/Ubuntu) out from under dpkg/rpm/
+#      pacman leaves that package "installed" with its files gone - a
+#      later apt/dnf/pacman run, or any of their kernel/initramfs hooks,
+#      then trips over the mismatch. This script cannot run the real
+#      package manager itself (no network assumptions, no interactive
+#      prompts, and it would make the picker a package manager by
+#      accident), so it refuses and names the real one instead. See
+#      package-owner.sh.
+#   5. The chroot must be able to resolve the root device BEFORE anything
 #      is deleted. Learned the hard way: the first real removal deleted
 #      the kernel cleanly and then failed at update-grub, leaving the
 #      files gone and grub.cfg still listing them - worse than either
@@ -42,6 +51,17 @@ esac
 # ------------------------------------------------------------- guard 3
 [ -f "$root/boot/vmlinuz-$release" ] || \
     die "no /boot/vmlinuz-$release on the target - nothing removed"
+
+# ------------------------------------------------------------- guard 4
+# Ask before touching anything. A hand-installed kernel (this project's
+# actual common case) reports unowned and falls straight through.
+pkg=$("$(dirname "$0")/package-owner.sh" "$root" "/boot/vmlinuz-$release" 2>/dev/null) || pkg=""
+if [ -n "$pkg" ]; then
+    die "this kernel belongs to package '$pkg' - remove it with your \
+package manager instead (or chromebook-fixer's 'kernels --remove', \
+which purges it properly). Deleting the files here would leave $pkg \
+\"installed\" with nothing left to back that up."
+fi
 
 # ------------------------------------------------------------- guard 2
 running=$(uname -r 2>/dev/null || echo "")
@@ -118,6 +138,19 @@ fi
 marker=$root/boot/nightfall-default
 if [ -f "$marker" ] && grep -qx "/boot/vmlinuz-$release" "$marker" 2>/dev/null; then
     rm -f "$marker" && say "cleared the saved default (it pointed at this kernel)"
+fi
+
+# Same idea for a saved per-kernel command line (apply-cmdline.sh) - also
+# survivable either way, since apply-cmdline.sh only applies a line whose
+# key matches a menu row, so an orphaned one is inert, never wrong. Found
+# stale on the Slate (a line for a kernel removed long ago): nothing else
+# ever prunes this file, so do it here, same trigger as the marker above.
+cmdline_file=$root/boot/nightfall-cmdline
+if [ -f "$cmdline_file" ] \
+   && awk -F'\t' -v k="/boot/vmlinuz-$release" '$1==k{found=1} END{exit !found}' "$cmdline_file"; then
+    awk -F'\t' -v k="/boot/vmlinuz-$release" '$1 != k' "$cmdline_file" > "$cmdline_file.new" \
+        && mv "$cmdline_file.new" "$cmdline_file" \
+        && say "removed the saved command line for this kernel"
 fi
 sync
 

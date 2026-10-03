@@ -74,6 +74,7 @@ nightfall_bin=$repo/ui/nightfall
 for f in "$here/init" "$here/discover-kernels.sh" "$here/apply-default.sh" \
          "$here/discover-tarballs.sh" "$here/install-kernel.sh" \
          "$here/remove-kernel.sh" "$here/apply-cmdline.sh" \
+         "$here/package-owner.sh" \
          "$here/discover-backup-targets.sh" "$here/backup-system.sh" \
          "$here/restore-system.sh" "$here/remove-backup.sh" \
          "$here/rename-backup.sh" "$here/fsck-root.sh" \
@@ -120,6 +121,7 @@ install -m 0755 "$here/discover-tarballs.sh"        "$staging/bin/discover-tarba
 install -m 0755 "$here/install-kernel.sh"           "$staging/bin/install-kernel.sh"
 install -m 0755 "$here/remove-kernel.sh"            "$staging/bin/remove-kernel.sh"
 install -m 0755 "$here/apply-cmdline.sh"            "$staging/bin/apply-cmdline.sh"
+install -m 0755 "$here/package-owner.sh"            "$staging/bin/package-owner.sh"
 install -m 0755 "$here/discover-backup-targets.sh"  "$staging/bin/discover-backup-targets.sh"
 install -m 0755 "$here/backup-system.sh"            "$staging/bin/backup-system.sh"
 install -m 0755 "$here/restore-system.sh"           "$staging/bin/restore-system.sh"
