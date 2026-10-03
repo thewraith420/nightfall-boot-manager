@@ -252,9 +252,12 @@ and tested in the harness; they have simply never met the hardware.
 - **Backup is Slate-only.** The Back up / Restore menu row is hidden on any
   board that does not identify itself as a Nocturne (an unreadable board
   name keeps it, so the Slate can never lose it to a missing sysfs file).
-  This also hides *Boot a live USB* (the ISO-file option), which lives under
-  that menu; booting a drive from the **Boot** screen is unaffected.
-  `/boot/nightfall-backup` (`1`/`0`) overrides it either way.
+  `/boot/nightfall-backup` (`1`/`0`) overrides it either way. *Boot a
+  specific ISO* used to live under that menu and was hidden by this same
+  gate as a side effect, which was wrong - it has nothing to do with
+  backups and is just as useful on a generic PC. Moved to the **Boot**
+  screen (2026-10-03), alongside booting a drive outright; neither is
+  gated by this setting.
 - **A root Nightfall can find and read.** `find-real-root.sh` walks every
   partition looking for the one stamped with this exact build, recognising
   **ext4, xfs, btrfs or f2fs** from the superblock (each mounted read-only
@@ -661,15 +664,23 @@ accumulate NVRAM clutter.
 > same way every other shell script here is, but nobody has armed a real
 > `BootNext` from it yet.
 
-**Boot a live USB** (`Back up / Restore → Boot a live USB`) is the earlier,
+**Boot a specific ISO** (`Boot → Boot a specific ISO on a drive`, formerly
+`Back up / Restore → Boot a live USB` until 2026-10-03) is the earlier,
 narrower answer to the same problem, kept as a secondary option rather than
 removed: loop-mount a `.iso` file as `iso9660` and `kexec` straight into the
 kernel and initrd found inside it, the same trick GRUB+Ventoy use to boot an
-ISO that was never extracted. Detects Ubuntu and derivatives (`casper`) and
-Debian Live (`live-boot`); anything else is refused by name rather than
-guessed at, since a wrong guess here is a kexec into a kernel with no idea
-how to find its own root. Deliberately not quiet: this is a rescue boot, so
-trouble finding or mounting the ISO after the handoff has to be visible, not
+ISO that was never extracted. The row no longer says "USB" at all (the old
+`Boot a live USB` label read as a synonym for the BootNext rows next to it
+now) - those hand the *whole* drive to firmware (a Ventoy stick still shows
+its own menu); this kexecs straight into *one specific .iso file*, no
+firmware reboot involved, and every label in this flow says "a specific
+ISO" rather than "a live USB" to keep the two from reading as the same
+feature. Detects
+Ubuntu and derivatives (`casper`) and Debian Live (`live-boot`); anything
+else is refused by name rather than guessed at, since a wrong guess here is
+a kexec into a kernel with no idea how to find its own root. Deliberately
+not quiet: this is a rescue boot, so trouble finding or mounting the ISO
+after the handoff has to be visible, not
 hidden behind Nightfall's usual splash. Where **Boot an external drive**
 hands the whole drive to firmware sight unseen, this one is for the
 narrower case of a specific `.iso` file sitting on an otherwise-ordinary

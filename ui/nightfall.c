@@ -2999,20 +2999,6 @@ static void show_backup_menu(void) {
     lv_obj_t *b = make_row(LV_SYMBOL_SAVE, buf, g_target_n == 0);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_backup_targets);
 
-    /* Same drive list as above, for a different reason to want one
-     * plugged in: the drive cannot be present at boot either way, so
-     * this belongs next to Back up now rather than as its own top-level
-     * menu with a second "no drive found" screen to keep in sync. The
-     * ISO list itself is not counted here - scanning every drive for
-     * .iso files just to draw this row would cost exactly what
-     * scan-drives.sh's own header explains backups avoid by being
-     * listed lazily, and here there is no cached list to show at all
-     * until a drive is actually picked. */
-    snprintf(buf, sizeof(buf), "Boot a live USB   (%d drive%s found)",
-             g_target_n, g_target_n == 1 ? "" : "s");
-    b = make_row(LV_SYMBOL_USB, buf, g_target_n == 0);
-    lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_live_boot_targets);
-
     snprintf(buf, sizeof(buf), "Restore a backup   (%d available)", g_backup_n);
     b = make_row(LV_SYMBOL_UPLOAD, buf, g_backup_n == 0);
     lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_restore_list);
@@ -3060,13 +3046,27 @@ static void show_backup_targets(void) {
     }
 }
 
-/* ---------------- Boot a live USB ----------------
+/* ---------------- Boot a specific ISO ----------------
  *
- * The one thing the drive is plugged in for that is not backup/restore:
- * kexec into a live image on it, via boot-live-iso.sh. Two taps deep
- * because it is genuinely two choices - which drive, then which ISO on
- * it - and unlike backups there is nothing to list until a drive is
- * picked (see the comment on the menu row above).
+ * kexec straight into a live image found on a drive, via
+ * boot-live-iso.sh. Two taps deep because it is genuinely two choices -
+ * which drive, then which ISO on it - and unlike backups there is
+ * nothing to list until a drive is picked.
+ *
+ * Lives in the main Boot screen, NOT Back up/Restore - it ended up there
+ * only because that was the first screen with a drive list to reuse, and
+ * Bob later called that placement a mistake: booting is the Boot
+ * screen's job, backup/restore is unrelated to it. Moved 2026-10-03.
+ * It sits next to the "Boot an external drive" BootNext rows there
+ * (see boot-external-drive.sh), which is exactly why the wording has to
+ * carry the distinction on its own: BootNext hands the WHOLE drive to
+ * firmware - a Ventoy stick still shows its own menu, another live-USB
+ * tool's drive boots whatever it normally would. This instead kexecs
+ * Nightfall straight into ONE specific .iso file's own kernel+initrd, no
+ * firmware reboot, no menu of any kind in between - so every label here
+ * says "a specific ISO", never "a live USB" (the old wording, which read
+ * as a synonym for the row right next to it), to keep the two from
+ * reading as the same feature.
  *
  * This ends the running Nightfall process rather than returning to the
  * menu, the same shape as Restart/Power off/a normal kernel choice, not
@@ -3120,7 +3120,7 @@ static void live_iso_click_cb(lv_event_t *e) {
 
 static void show_live_iso_list(void) {
     lv_obj_clean(g_list);
-    lv_label_set_text(g_header, LV_SYMBOL_USB "  Boot a live USB");
+    lv_label_set_text(g_header, LV_SYMBOL_USB "  Boot a specific ISO");
     add_back_row(show_live_boot_targets);
 
     if (g_live_iso_n == 0) {
@@ -3158,8 +3158,8 @@ static void live_target_click_cb(lv_event_t *e) {
 
 static void show_live_boot_targets(void) {
     lv_obj_clean(g_list);
-    lv_label_set_text(g_header, LV_SYMBOL_USB "  Boot from which drive?");
-    add_back_row(show_backup_menu);
+    lv_label_set_text(g_header, LV_SYMBOL_USB "  Boot an ISO from which drive?");
+    add_back_row(show_kernel_list);
 
     for (int i = 0; i < g_target_n; i++) {
         char row[220];
@@ -3341,6 +3341,22 @@ static void show_kernel_list(void) {
                  g_bootable[i].size);
         lv_obj_t *b = make_row(LV_SYMBOL_DRIVE, row, 0);
         lv_obj_add_event_cb(b, boot_external_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+
+    /* Deliberately NOT worded like the rows above: those hand the WHOLE
+     * drive to firmware (a Ventoy stick still shows its own menu). This
+     * kexecs Nightfall straight into ONE specific .iso file's own
+     * kernel+initrd, no firmware reboot involved - "a specific ISO" is
+     * the whole point of the wording, so it can't be mistaken for the
+     * row above it. Same reused drive list as Back up/Restore, for the
+     * same reason that menu's own row used to: the drive cannot be
+     * present at boot, so Rescan above is how it gets here either way. */
+    {
+        char row[96];
+        snprintf(row, sizeof(row), "Boot a specific ISO on a drive   (%d drive%s found)",
+                 g_target_n, g_target_n == 1 ? "" : "s");
+        lv_obj_t *b = make_row(LV_SYMBOL_USB, row, g_target_n == 0);
+        lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_live_boot_targets);
     }
 }
 
