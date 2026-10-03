@@ -2066,11 +2066,17 @@ static int rescan_drives(void) {
     pid_t pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {
-        /* The scan's own chatter would land on picker's stderr and end
-         * up in the boot log for no reason; it reports through the
-         * files it writes. */
+        /* stdout is discarded: the scan reports through the three files
+         * it writes. stderr is NOT discarded any more. Rescan finding
+         * nothing looked identical to Rescan never running, and the only
+         * way to tell them apart was the scan's own reasons, so they go
+         * to /run/nightfall/scan.log, which init prints into the boot
+         * log. */
         int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); }
+        if (devnull >= 0) dup2(devnull, STDOUT_FILENO);
+        int slog = open("/run/nightfall/scan.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (slog >= 0) { dup2(slog, STDERR_FILENO); close(slog); }
+        else if (devnull >= 0) dup2(devnull, STDERR_FILENO);
         execl(script, script,
               rootdev ? rootdev : "/dev/mmcblk0p2",
               rootmnt ? rootmnt : "/mnt/root",

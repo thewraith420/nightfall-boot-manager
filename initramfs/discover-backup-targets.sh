@@ -26,7 +26,13 @@ case "$rootdisk" in
 esac
 
 probe_dir=/run/nightfall/probe
+# Why each candidate was kept or skipped goes here, not to /dev/null: a
+# drive that is missing from the menu is otherwise indistinguishable from
+# a drive that was never there. Picker and init both point this at the
+# same file, and the boot log prints it.
+scanlog=${NIGHTFALL_SCAN_LOG:-/run/nightfall/scan.log}
 mkdir -p "$probe_dir" 2>/dev/null || true
+echo "backup-targets: root device $rootdev, excluding disk $rootdisk" >> "$scanlog" 2>/dev/null || true
 
 for disk in /sys/block/*; do
     d=${disk##*/}
@@ -61,11 +67,18 @@ for disk in /sys/block/*; do
         #
         # A partition that will not mount read-only is skipped: it is not
         # a usable backup target, whatever it is.
-        mount -o ro "/dev/$p" "$probe_dir" 2>/dev/null || continue
+        if ! mount -o ro "/dev/$p" "$probe_dir" 2>>"$scanlog"; then
+            echo "backup-targets: /dev/$p NOT mounted read-only - skipped" >> "$scanlog" 2>/dev/null || true
+            continue
+        fi
         fstype=$(awk -v d="/dev/$p" '$1 == d { print $3; exit }' /proc/mounts 2>/dev/null)
         free=$(df -h "$probe_dir" 2>/dev/null | awk 'NR==2{print $4}')
         umount "$probe_dir" 2>/dev/null || true
-        [ -n "$fstype" ] || continue
+        if [ -z "$fstype" ]; then
+            echo "backup-targets: /dev/$p mounted but reported no filesystem type - skipped" >> "$scanlog" 2>/dev/null || true
+            continue
+        fi
+        echo "backup-targets: /dev/$p kept: fstype=$fstype size=$size free=${free:-?}" >> "$scanlog" 2>/dev/null || true
 
         # Label is left empty: reading it needs blkid. picker falls back
         # to the device name, and device + type + free space is enough to

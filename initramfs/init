@@ -166,6 +166,13 @@ save_log() {
         echo "--- stages reached ---"
         printf '%s' "$stages"
         echo
+        # Every drive scan this boot ran - the one at startup AND each
+        # Rescan from the menu - with the reason for each drive it kept or
+        # skipped. Without this a Rescan that finds nothing looks exactly
+        # like one that never ran.
+        echo "--- drive scans (startup and every Rescan) ---"
+        if [ -s /run/nightfall/scan.log ]; then cat /run/nightfall/scan.log; else echo "(no scan output)"; fi
+        echo
         echo "--- selection ---"
         # "user" vs "timeout" matters: a boot where the panel stayed
         # dark and the timeout fired looks, downstream, exactly like one

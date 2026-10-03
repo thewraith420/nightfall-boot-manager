@@ -30,16 +30,20 @@ backups=${4:?$usage}
 bootable=${5:?$usage}
 
 here=$(dirname "$0")
+# Same log as discover-backup-targets.sh: every scan's reasons, so a
+# Rescan that finds nothing says why. The boot log prints this file.
+scanlog=${NIGHTFALL_SCAN_LOG:-/run/nightfall/scan.log}
+echo "scan-drives: start (root $rootdev, mount $rootmnt)" >> "$scanlog" 2>/dev/null || true
 
 : > "$targets.tmp"
 : > "$backups.tmp"
 : > "$bootable.tmp"
 
-"$here/discover-backup-targets.sh" "$rootdev" > "$targets.tmp" 2>/dev/null || : > "$targets.tmp"
+"$here/discover-backup-targets.sh" "$rootdev" > "$targets.tmp" 2>>"$scanlog" || { echo "scan-drives: discover-backup-targets failed" >> "$scanlog"; : > "$targets.tmp"; }
 
 while read -r dev _rest; do
     [ -n "$dev" ] || continue
-    "$here/discover-backups.sh" "$rootmnt" "$dev" 2>/dev/null \
+    "$here/discover-backups.sh" "$rootmnt" "$dev" 2>>"$scanlog" \
         | awk -v t="$dev" 'NF{print t "\t" $0}' >> "$backups.tmp" || :
 done < "$targets.tmp"
 
@@ -47,7 +51,7 @@ done < "$targets.tmp"
 # be a backup target without being bootable (an ordinary exFAT stick with
 # no ESP on it) and bootable without being a useful backup target (a
 # read-only Ventoy stick), so one list cannot stand in for the other.
-"$here/discover-bootable-drives.sh" "$rootdev" > "$bootable.tmp" 2>/dev/null || : > "$bootable.tmp"
+"$here/discover-bootable-drives.sh" "$rootdev" > "$bootable.tmp" 2>>"$scanlog" || { echo "scan-drives: discover-bootable-drives failed" >> "$scanlog"; : > "$bootable.tmp"; }
 
 cat "$targets.tmp" > "$targets"
 cat "$backups.tmp" > "$backups"
