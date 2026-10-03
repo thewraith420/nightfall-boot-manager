@@ -55,6 +55,23 @@ echo "=== a missing file is not fatal ==="
 menu; rm -f "$T/saved"; sh "$S" "$T/menu.tsv" "$T/saved" > "$T/out" 2>/dev/null
 diff -q "$T/menu.tsv" "$T/out" >/dev/null && ok "passes through rather than failing the boot" || bad "broke on a missing file"
 
+echo "=== comments and blank lines in the saved file are skipped, not applied ==="
+menu
+printf '# a comment\n\n/boot/vmlinuz-A\troot=x ro COMMENTED\n' > "$T/saved"
+run
+[ "$(field4 'Ubuntu')" = "root=x ro COMMENTED" ] && ok "the real line still applies around them" || bad "got: $(field4 'Ubuntu')"
+
+echo "=== a duplicate key: the LAST line for it wins ==="
+menu
+printf '/boot/vmlinuz-A\troot=x ro FIRST\n/boot/vmlinuz-A\troot=x ro SECOND\n' > "$T/saved"
+run
+[ "$(field4 'Ubuntu')" = "root=x ro SECOND" ] && ok "last occurrence wins, not first" || bad "got: $(field4 'Ubuntu')"
+
+echo "=== the saved file's last line has no trailing newline ==="
+menu; printf '/boot/vmlinuz-A\troot=x ro NONEWLINE' > "$T/saved"
+run
+[ "$(field4 'Ubuntu')" = "root=x ro NONEWLINE" ] && ok "still read correctly" || bad "got: $(field4 'Ubuntu')"
+
 echo
 echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]
