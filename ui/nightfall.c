@@ -3692,6 +3692,7 @@ struct input_src {
     int code_x, code_y;
     struct input_absinfo abs_x, abs_y;
     int last_x, last_y;
+    int rem_x, rem_y;       /* trackpad: the fraction of a pixel not yet moved */
 };
 static struct input_src g_inputs[MAX_INPUTS];
 static int g_input_n;
@@ -3810,6 +3811,8 @@ static int inputs_rescan(void) {
             g_inputs[g_input_n].abs_y = ay;
             g_inputs[g_input_n].last_x = -1;
             g_inputs[g_input_n].last_y = -1;
+            g_inputs[g_input_n].rem_x = 0;   /* slots are reused after an unplug */
+            g_inputs[g_input_n].rem_y = 0;
         }
         g_input_n++;
         added++;
@@ -3954,16 +3957,65 @@ static int kb_handle_event(const struct input_event *ev) {
  * person sees is already the logical orientation. */
 static lv_obj_t *g_cursor;
 
+/* The classic arrow pointer: B = outline, W = fill, space = transparent.
+ * Its tip is the top-left pixel, which is exactly where LVGL places the
+ * cursor object - so the tip IS the click point. (The round dot it
+ * replaced clicked at its own top-left corner, off to one side of what
+ * it looked like it was pointing at.) */
+static const char *const CURSOR_ARROW[] = {
+    "B           ",
+    "BB          ",
+    "BWB         ",
+    "BWWB        ",
+    "BWWWB       ",
+    "BWWWWB      ",
+    "BWWWWWB     ",
+    "BWWWWWWB    ",
+    "BWWWWWWWB   ",
+    "BWWWWWWWWB  ",
+    "BWWWWWWWWWB ",
+    "BWWWWWWBBBBB",
+    "BWWWBWWB    ",
+    "BWWB BWWB   ",
+    "BWB  BWWB   ",
+    "BB    BWWB  ",
+    "B     BWWB  ",
+    "       BWWB ",
+    "        BB  ",
+};
+#define CURSOR_ARROW_W 12
+#define CURSOR_ARROW_H 19
+
+/* Built once at the size the UI scale calls for, by whole-pixel
+ * replication so it stays crisp: 1x (19px) at 1080p, 2x on the Slate's
+ * 3000x2000 panel - the same physical size class as the rest of the UI. */
+static lv_image_dsc_t g_cursor_img;
+static void cursor_image_build(void) {
+    int sc = (ui_px(40) + CURSOR_ARROW_H / 2) / CURSOR_ARROW_H;
+    if (sc < 1) sc = 1;
+    int w = CURSOR_ARROW_W * sc, h = CURSOR_ARROW_H * sc;
+    uint32_t *px = calloc((size_t)w * h, sizeof(uint32_t));   /* 0 = transparent */
+    if (!px) return;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            char c = CURSOR_ARROW[y / sc][x / sc];
+            if (c == 'B')      px[y * w + x] = 0xff101418;   /* ARGB: the UI's own near-black */
+            else if (c == 'W') px[y * w + x] = 0xffffffff;
+        }
+    g_cursor_img.header.magic = LV_IMAGE_HEADER_MAGIC;
+    g_cursor_img.header.cf = LV_COLOR_FORMAT_ARGB8888;
+    g_cursor_img.header.w = (uint32_t)w;
+    g_cursor_img.header.h = (uint32_t)h;
+    g_cursor_img.header.stride = (uint32_t)w * 4;
+    g_cursor_img.data_size = (uint32_t)(w * h * 4);
+    g_cursor_img.data = (const uint8_t *)px;
+}
+
 static void mouse_cursor_show(struct nightfall_ctx *ctx) {
     if (!g_cursor) {
-        g_cursor = lv_obj_create(lv_layer_sys());
-        lv_obj_remove_style_all(g_cursor);
-        lv_obj_set_size(g_cursor, ui_px(26), ui_px(26));
-        lv_obj_set_style_radius(g_cursor, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(g_cursor, lv_color_hex(0xffffff), 0);
-        lv_obj_set_style_bg_opa(g_cursor, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(g_cursor, lv_color_hex(0x1c2530), 0);
-        lv_obj_set_style_border_width(g_cursor, ui_px(4), 0);
+        cursor_image_build();
+        g_cursor = lv_image_create(lv_layer_sys());
+        if (g_cursor_img.data) lv_image_set_src(g_cursor, &g_cursor_img);
         lv_obj_remove_flag(g_cursor, LV_OBJ_FLAG_CLICKABLE);
         if (ctx->indev) lv_indev_set_cursor(ctx->indev, g_cursor);
     }
@@ -3994,11 +4046,34 @@ static void mouse_wheel(int notches) {
     lv_obj_scroll_by_bounded(g_list, 0, notches * (ROW_H / 2), LV_ANIM_OFF);
 }
 
+/* Pointer speed, for a mouse and a trackpad alike: 3/2 of the original
+ * tuning. Bob on the LOQ: "OK as is but a little faster movement would be
+ * better". A plain constant, no acceleration curve - predictable is worth
+ * more than clever in a menu this size.
+ *
+ * Scaled motion is integer pixels, so the fraction left over from each
+ * event is CARRIED to the next instead of dropped. Dropping it made slow
+ * movement feel sluggish or dead: a trackpad reports in small steps, and
+ * a step worth 0.7px rounded to nothing every single time. */
+#define POINTER_SPEED_NUM 3
+#define POINTER_SPEED_DEN 2
+
+/* Adds num/den to *out, keeping what does not make a whole pixel in *rem
+ * (same sign as the motion, so direction changes do not leak a pixel). */
+static void scale_carry(long num, long den, int *rem, int *out) {
+    long acc = (long)*rem + num;
+    long whole = acc / den;
+    *rem = (int)(acc - whole * den);
+    *out += (int)whole;
+}
+
+static int g_mouse_rem_x, g_mouse_rem_y;
+
 /* One mouse event. Returns 1 if it counts as the person being present. */
 static int mouse_handle_event(struct nightfall_ctx *ctx, const struct input_event *ev, int *dx, int *dy) {
     if (ev->type == EV_REL) {
-        if (ev->code == REL_X) { *dx += ev->value; return 1; }
-        if (ev->code == REL_Y) { *dy += ev->value; return 1; }
+        if (ev->code == REL_X) { scale_carry((long)ev->value * POINTER_SPEED_NUM, POINTER_SPEED_DEN, &g_mouse_rem_x, dx); return 1; }
+        if (ev->code == REL_Y) { scale_carry((long)ev->value * POINTER_SPEED_NUM, POINTER_SPEED_DEN, &g_mouse_rem_y, dy); return 1; }
         if (ev->code == REL_WHEEL) { mouse_wheel(ev->value); return 1; }
         return 0;
     }
@@ -4034,7 +4109,7 @@ static int trackpad_handle_event(struct nightfall_ctx *ctx, struct input_src *sr
                                   const struct input_event *ev, int *dx, int *dy) {
     if (ev->type == EV_ABS) {
         if (ev->code == ABS_MT_TRACKING_ID) {
-            if (ev->value == -1) { src->last_x = -1; src->last_y = -1; }
+            if (ev->value == -1) { src->last_x = -1; src->last_y = -1; src->rem_x = 0; src->rem_y = 0; }
             return 0;
         }
         int is_x = (ev->code == src->code_x);
@@ -4044,12 +4119,13 @@ static int trackpad_handle_event(struct nightfall_ctx *ctx, struct input_src *sr
         int range_y = src->abs_y.maximum - src->abs_y.minimum;
         int pad_short = (range_x > 0 && range_y > 0) ? (range_x < range_y ? range_x : range_y) : 0;
         int screen_short = ctx->cw < ctx->ch ? ctx->cw : ctx->ch;
-        int scale_den = pad_short > 0 ? pad_short * TRACKPAD_SWEEPS_PER_SCREEN : 8;
+        long scale_den = (long)(pad_short > 0 ? pad_short * TRACKPAD_SWEEPS_PER_SCREEN : 8) * POINTER_SPEED_DEN;
+        long scale_num = (long)screen_short * POINTER_SPEED_NUM;
         if (is_x) {
-            if (src->last_x >= 0) *dx += (ev->value - src->last_x) * screen_short / scale_den;
+            if (src->last_x >= 0) scale_carry((long)(ev->value - src->last_x) * scale_num, scale_den, &src->rem_x, dx);
             src->last_x = ev->value;
         } else {
-            if (src->last_y >= 0) *dy += (ev->value - src->last_y) * screen_short / scale_den;
+            if (src->last_y >= 0) scale_carry((long)(ev->value - src->last_y) * scale_num, scale_den, &src->rem_y, dy);
             src->last_y = ev->value;
         }
         return 1;
@@ -4057,6 +4133,8 @@ static int trackpad_handle_event(struct nightfall_ctx *ctx, struct input_src *sr
     if (ev->type == EV_KEY && ev->code == BTN_TOUCH && ev->value == 0) {
         src->last_x = -1;
         src->last_y = -1;
+        src->rem_x = 0;
+        src->rem_y = 0;
         return 0;
     }
     if (ev->type == EV_KEY && ev->code == BTN_LEFT) {

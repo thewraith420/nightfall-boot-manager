@@ -932,15 +932,37 @@ int main(void) {
         mouse_move(&mc, 20, 30);
         ck(mc.touch_x == 20 && mc.touch_y == 30, "motion is applied unrotated even with ROT_270: a mouse moves in the room, not the panel");
         ck(g_cursor && !lv_obj_has_flag(g_cursor, LV_OBJ_FLAG_HIDDEN), "a cursor is drawn once the mouse moves");
+        ck(lv_obj_check_type(g_cursor, &lv_image_class), "and it is an arrow image, not the old round dot");
+        ck(g_cursor_img.header.w % CURSOR_ARROW_W == 0 && g_cursor_img.header.h % CURSOR_ARROW_H == 0
+           && g_cursor_img.header.h >= CURSOR_ARROW_H,
+           "drawn at a whole-number multiple of the 12x19 arrow, so it stays crisp");
+        {
+            const uint32_t *px = (const uint32_t *)g_cursor_img.data;
+            int w = (int)g_cursor_img.header.w;
+            ck(px && (px[0] >> 24) == 0xff, "its tip is the top-left pixel - the point LVGL clicks at");
+            ck(px && (px[w - 1] >> 24) == 0, "and the rest of the top row is transparent, not a box");
+        }
         mouse_cursor_hide();
         ck(lv_obj_has_flag(g_cursor, LV_OBJ_FLAG_HIDDEN), "and hidden again when touch takes over");
         {
             struct input_event mev = { .type = EV_REL, .code = REL_X, .value = 7 };
             int dx = 0, dy = 0;
-            ck(mouse_handle_event(&mc, &mev, &dx, &dy) == 1 && dx == 7, "REL_X accumulates into dx");
-            mev.code = REL_Y; mev.value = -3;
+            g_mouse_rem_x = g_mouse_rem_y = 0;
+            ck(mouse_handle_event(&mc, &mev, &dx, &dy) == 1 && dx == 10,
+               "REL_X accumulates into dx at 1.5x speed (7 -> 10, half a pixel carried)");
+            mev.value = 1;
             mouse_handle_event(&mc, &mev, &dx, &dy);
-            ck(dy == -3, "and REL_Y into dy");
+            ck(dx == 12, "and the carried half pixel is not lost: 7 + 1 counts moves 12, exactly 1.5x");
+            mev.code = REL_Y; mev.value = -2;
+            mouse_handle_event(&mc, &mev, &dx, &dy);
+            ck(dy == -3, "REL_Y the same, in either direction");
+            {
+                int ddx = 0, ddy = 0;
+                struct input_event slow = { .type = EV_REL, .code = REL_X, .value = 1 };
+                g_mouse_rem_x = 0;
+                for (int k = 0; k < 10; k++) mouse_handle_event(&mc, &slow, &ddx, &ddy);
+                ck(ddx == 15, "ten 1-count nudges move 15px - slow motion adds up instead of rounding away");
+            }
             mev.type = EV_KEY; mev.code = BTN_LEFT; mev.value = 1;
             mouse_handle_event(&mc, &mev, &dx, &dy);
             ck(mc.touch_down == 1, "the left button presses at the pointer");
@@ -976,14 +998,15 @@ int main(void) {
                "the first sample after a touch-down only records a position, no motion yet - nothing to diff against");
             tev.value = 150;
             trackpad_handle_event(&tc, &ts, &tev, &dx, &dy);
-            /* screen_short=2000, pad range=1000, TRACKPAD_SWEEPS_PER_SCREEN=2 -> scale is exactly 1:1 here */
-            ck(dx == 50, "a later sample is scaled by screen-vs-pad range - here a clean 1:1");
+            /* screen_short=2000, pad range=1000, TRACKPAD_SWEEPS_PER_SCREEN=2 -> 1:1 before the
+             * pointer speed, then 3/2 of that */
+            ck(dx == 75, "a later sample is scaled by screen-vs-pad range, times the 1.5x pointer speed");
             tev.code = ABS_MT_POSITION_Y; tev.value = 200;
             trackpad_handle_event(&tc, &ts, &tev, &dx, &dy);
             ck(dy == 0, "Y tracks its own axis independently, still no motion on its first sample");
             tev.value = 220;
             trackpad_handle_event(&tc, &ts, &tev, &dx, &dy);
-            ck(dy == 20, "and produces motion on the next one, same as X");
+            ck(dy == 30, "and produces motion on the next one, same as X");
 
             tev.type = EV_ABS; tev.code = ABS_MT_TRACKING_ID; tev.value = -1;
             trackpad_handle_event(&tc, &ts, &tev, &dx, &dy);
@@ -992,6 +1015,23 @@ int main(void) {
             tev.code = ABS_MT_POSITION_X; tev.value = 900;
             trackpad_handle_event(&tc, &ts, &tev, &dx, &dy);
             ck(dx == 0, "so touching back down somewhere else does not read as one huge jump");
+            ck(ts.rem_x == 0 && ts.rem_y == 0, "and a leftover fraction from the last touch is dropped too");
+
+            {
+                /* A pad whose units are much finer than the screen's pixels: each
+                 * 1-unit step is worth 0.3px. Dropping the fraction (the old
+                 * behaviour) made slow strokes move nothing at all. */
+                struct nightfall_ctx fc = { .cw = 600, .ch = 600 };
+                struct input_src fs = { .code_x = ABS_MT_POSITION_X, .code_y = ABS_MT_POSITION_Y,
+                                        .abs_x = { .minimum = 0, .maximum = 3000 },
+                                        .abs_y = { .minimum = 0, .maximum = 3000 },
+                                        .last_x = -1, .last_y = -1 };
+                int fdx = 0, fdy = 0;
+                struct input_event fev = { .type = EV_ABS, .code = ABS_MT_POSITION_X, .value = 1000 };
+                trackpad_handle_event(&fc, &fs, &fev, &fdx, &fdy);
+                for (int k = 1; k <= 20; k++) { fev.value = 1000 + k; trackpad_handle_event(&fc, &fs, &fev, &fdx, &fdy); }
+                ck(fdx == 3, "a slow 20-unit stroke on a fine-grained pad still moves (3px), not 0");
+            }
 
             struct input_src ts_touch = { .code_x = ABS_X, .code_y = ABS_Y,
                                            .abs_x = { .minimum = 0, .maximum = 1000 },
@@ -1011,7 +1051,7 @@ int main(void) {
             trackpad_handle_event(&tc, &ts_noscale, &tev, &dx, &dy);
             tev.value = 18;
             trackpad_handle_event(&tc, &ts_noscale, &tev, &dx, &dy);
-            ck(dx == 2000, "a device with no usable reported range falls back to a fixed divisor, not a crash");
+            ck(dx == 3000, "a device with no usable reported range falls back to a fixed divisor, not a crash");
 
             dx = 0; dy = 0;
             struct input_event cev = { .type = EV_KEY, .code = BTN_LEFT, .value = 1 };
