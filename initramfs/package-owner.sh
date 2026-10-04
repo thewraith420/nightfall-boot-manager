@@ -47,7 +47,8 @@ path=${2:?usage: package-owner.sh <root-mount> <path-within-root>}
 if [ -d "$root/var/lib/dpkg/info" ]; then
     hit=$(grep -lFx "$path" "$root"/var/lib/dpkg/info/*.list 2>/dev/null | head -n1) || hit=""
     if [ -n "$hit" ]; then
-        pkg=$(basename "$hit" .list)
+        pkg=${hit##*/}
+        pkg=${pkg%.list}
         # Multi-arch packages are named "pkg:arch.list" - report the bare name.
         printf '%s\n' "${pkg%%:*}"
         exit 0
@@ -59,13 +60,14 @@ if [ -d "$root/var/lib/pacman/local" ]; then
     for f in "$root"/var/lib/pacman/local/*/files; do
         [ -f "$f" ] || continue
         if grep -qFx "$relpath" "$f" 2>/dev/null; then
-            pkg=$(awk '/^%NAME%$/{getline; print; exit}' "$(dirname "$f")/desc" 2>/dev/null) || pkg=""
+            pkgdir=${f%/*}
+            pkg=$(awk '/^%NAME%$/{getline; print; exit}' "$pkgdir/desc" 2>/dev/null) || pkg=""
             if [ -n "$pkg" ]; then
                 printf '%s\n' "$pkg"
             else
                 # Fall back to the versioned directory name rather than
                 # reporting nothing - still clearly identifies the package.
-                basename "$(dirname "$f")"
+                printf '%s\n' "${pkgdir##*/}"
             fi
             exit 0
         fi

@@ -272,7 +272,14 @@ fi
 
 say "installing into $NIGHTFALL_DIR (invisible to GRUB auto-detection)"
 mkdir -p "$NIGHTFALL_DIR"
-cp "$kernel"    "$NIGHTFALL_DIR/vmlinuz"
+# Reinstalling the kernel that is already installed passes the installed
+# file as the source. Same file, nothing to copy - cp refuses that, and
+# the failure came after the entry checks, so it looked like a real error.
+if [ "$(realpath "$kernel")" = "$(realpath -m "$NIGHTFALL_DIR/vmlinuz")" ]; then
+    say "kernel is already the installed one - leaving it in place"
+else
+    cp "$kernel" "$NIGHTFALL_DIR/vmlinuz"
+fi
 cp "$initramfs" "$NIGHTFALL_DIR/initramfs.img"
 chmod 0644 "$NIGHTFALL_DIR/vmlinuz" "$NIGHTFALL_DIR/initramfs.img"
 

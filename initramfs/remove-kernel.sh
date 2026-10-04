@@ -55,7 +55,8 @@ esac
 # ------------------------------------------------------------- guard 4
 # Ask before touching anything. A hand-installed kernel (this project's
 # actual common case) reports unowned and falls straight through.
-pkg=$("$(dirname "$0")/package-owner.sh" "$root" "/boot/vmlinuz-$release" 2>/dev/null) || pkg=""
+here=${0%/*}; [ "$here" != "$0" ] || here=.
+pkg=$("$here/package-owner.sh" "$root" "/boot/vmlinuz-$release" 2>/dev/null) || pkg=""
 if [ -n "$pkg" ]; then
     die "this kernel belongs to package '$pkg' - remove it with your \
 package manager instead (or chromebook-fixer's 'kernels --remove', \

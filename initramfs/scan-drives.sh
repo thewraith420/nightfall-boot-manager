@@ -29,7 +29,10 @@ targets=${3:?$usage}
 backups=${4:?$usage}
 bootable=${5:?$usage}
 
-here=$(dirname "$0")
+# Not dirname: it is not a busybox applet in the initramfs, so $(dirname)
+# silently produced an empty path and every scan read nothing.
+here=${0%/*}
+[ "$here" != "$0" ] || here=.
 # Same log as discover-backup-targets.sh: every scan's reasons, so a
 # Rescan that finds nothing says why. The boot log prints this file.
 scanlog=${NIGHTFALL_SCAN_LOG:-/run/nightfall/scan.log}
