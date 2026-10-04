@@ -90,11 +90,6 @@ diskdev="$partdir/$disk"
 
 say "target: disk=$diskdev partition=$partnum loader=$loader"
 
-# Captured before anything else touches NVRAM, so restoring it later puts
-# BootOrder back to exactly what it was - not "everything except our
-# entry" computed some other way, the literal original value.
-orig_order=$($EFIBOOTMGR 2>/dev/null | grep -oE '^BootOrder: .*' | cut -d' ' -f2) || orig_order=""
-
 # Cleanup first: any earlier boot-external-drive.sh entry left behind (an
 # attempt that armed BootNext but, for whatever reason, never got to
 # reboot) would otherwise accumulate forever - efibootmgr has no notion of
@@ -106,19 +101,47 @@ for n in $old; do
     $EFIBOOTMGR -b "$n" -B >/dev/null 2>&1 || say "WARNING: could not remove Boot$n (continuing anyway)"
 done
 
+# Captured AFTER the stale entries are gone, so restoring it later puts
+# BootOrder back to what it was minus our own leftovers - not "everything
+# except our entry" computed some other way. Captured before, it put the
+# deleted entries straight back into BootOrder on restore (the LOQ ended up
+# with BootOrder starting 0007,0006 - two entries this script had made).
+orig_order=$($EFIBOOTMGR 2>/dev/null | grep -oE '^BootOrder: .*' | cut -d' ' -f2) || orig_order=""
+
+# Every failure after the new entry exists goes through here: remove the
+# entry (if its number is known) and put BootOrder back, since
+# efibootmgr -c has already moved the new entry to the front of it. A
+# failed attempt has to leave NVRAM as it found it, or the next normal
+# boot tries a one-shot entry that was never meant to stay.
+undo_create() {
+    if [ -n "${1:-}" ]; then
+        $EFIBOOTMGR -b "$1" -B >/dev/null 2>&1 || say "WARNING: could not remove Boot$1"
+    fi
+    if [ -n "$orig_order" ]; then
+        $EFIBOOTMGR -o "$orig_order" >/dev/null 2>&1 || say "WARNING: could not restore the original BootOrder"
+    fi
+}
+
 say "creating a new UEFI boot entry"
 create_out=$($EFIBOOTMGR -c -d "$diskdev" -p "$partnum" -L "$LABEL" -l "$loader" 2>&1) || \
     die "efibootmgr could not create a boot entry - nothing was changed
 $create_out"
 
 bootnum=$(printf '%s\n' "$create_out" | grep -F "$LABEL" | grep -oE '^Boot[0-9A-Fa-f]{4}' | sed 's/^Boot//' | head -n1)
-[ -n "$bootnum" ] || die "created an entry but could not find its Boot number in efibootmgr's output - refusing to guess
+# Some efibootmgr versions print less after -c. The stale entries are
+# gone, so ours is the only one with this label: ask again rather than
+# give up with a just-created entry left behind.
+[ -n "$bootnum" ] || bootnum=$($EFIBOOTMGR 2>/dev/null | grep -F "$LABEL" | grep -oE '^Boot[0-9A-Fa-f]{4}' | sed 's/^Boot//' | head -n1)
+if [ -z "$bootnum" ]; then
+    undo_create ""
+    die "created an entry but could not find its Boot number - BootOrder was put back; the entry may need removing by hand
 $create_out"
+fi
 
 say "arming BootNext = Boot$bootnum"
 if ! $EFIBOOTMGR -n "$bootnum" >/dev/null 2>&1; then
-    $EFIBOOTMGR -b "$bootnum" -B >/dev/null 2>&1 || say "WARNING: could not remove Boot$bootnum after BootNext failed to set"
-    die "could not set BootNext - the new entry was removed, nothing else was changed"
+    undo_create "$bootnum"
+    die "could not set BootNext - the new entry was removed and BootOrder put back"
 fi
 
 # Read back rather than trust the exit status alone - BootNext is the one
@@ -126,8 +149,8 @@ fi
 # instead of being inferred from efibootmgr not complaining.
 confirmed=$($EFIBOOTMGR 2>/dev/null | grep -iE '^BootNext:' | grep -ioE '[0-9A-Fa-f]{4}$' || true)
 if [ "$(printf '%s' "$confirmed" | tr a-f A-F)" != "$(printf '%s' "$bootnum" | tr a-f A-F)" ]; then
-    $EFIBOOTMGR -b "$bootnum" -B >/dev/null 2>&1 || say "WARNING: could not remove Boot$bootnum after BootNext failed to confirm"
-    die "BootNext did not take (read back '$confirmed', expected '$bootnum') - the new entry was removed, nothing else was changed"
+    undo_create "$bootnum"
+    die "BootNext did not take (read back '$confirmed', expected '$bootnum') - the new entry was removed and BootOrder put back"
 fi
 
 

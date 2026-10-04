@@ -157,6 +157,35 @@ out=$(run 2>&1)
 grep -q "^0003" "$ENTRIES" && bad "the OLD stale entry is still there (should have been replaced)" || ok "the old stale entry (0003) is gone"
 teardown
 
+echo "=== stale entries already at the front of BootOrder do not come back (the LOQ's state) ==="
+# Failed attempts on the LOQ left two of our entries behind AND prepended
+# to BootOrder. The original order used to be captured BEFORE those were
+# deleted, so "restoring" it put them straight back in.
+setup
+seed_entry 0006 "Nightfall-boot-once" /dev/sdz 2 '\EFI\BOOT\BOOTX64.EFI'
+seed_entry 0007 "Nightfall-boot-once" /dev/sdy 1 '\EFI\BOOT\BOOTX64.EFI'
+printf '0007,0006,0010,0020,0030,0040,0050,0060' > "$BOOTORDER"
+write_mock
+out=$(run 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "still arms the boot" || bad "exit $rc: $out"
+[ "$(cat "$BOOTORDER")" = "0010,0020,0030,0040,0050,0060" ] \
+  && ok "BootOrder ends without the deleted stale entries" \
+  || bad "deleted entries were put back into BootOrder: $(cat "$BOOTORDER")"
+teardown
+
+echo "=== a failed attempt puts BootOrder back, not just its own entry ==="
+setup
+printf '0010,0020,0030' > "$BOOTORDER"
+write_mock "" noop_bootnext
+run >/dev/null 2>&1
+[ "$(cat "$BOOTORDER")" = "0010,0020,0030" ] \
+  && ok "BootOrder is exactly what it was after a failure" \
+  || bad "a failed attempt changed BootOrder: $(cat "$BOOTORDER")"
+grep -q -- '-o 0010,0020,0030' "$LOG" \
+  && ok "it restored BootOrder explicitly, not only by deleting the entry" \
+  || bad "no explicit BootOrder restore on the failure path: $(grep -- '-o' "$LOG")"
+teardown
+
 echo "=== an unrelated entry with a different label is left alone ==="
 setup
 seed_entry 0007 "Windows Boot Manager" /dev/sda 2 '\EFI\Microsoft\Boot\bootmgfw.efi'

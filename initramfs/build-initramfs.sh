@@ -21,7 +21,11 @@ out=${1:-$here/nightfall-initramfs.img}
 staging=$(mktemp -d)
 trap 'rm -rf "$staging"' EXIT
 
-# Applets init/discover-kernels.sh/apply-default.sh/kexec-boot.sh use.
+# Applets the runtime scripts use - the preflight below refuses to build
+# without every one of them. The last line was missing for a long time:
+# the scripts called sed/tr/sort/cp/dirname/basename anyway, which worked
+# on the Slate only because Ubuntu's busybox shell runs unlinked applets.
+# test-runtime-applets.sh checks the scripts against this list.
 # The second group is used only by init's diagnostics (see the boot-log
 # block in init): without them a failed boot leaves nothing behind, which
 # is what made the first real attempt impossible to debug. They are
@@ -31,7 +35,8 @@ APPLETS="sh mount umount mkdir echo printf cut head awk cat ls
          tar chroot tee rm df mv
          reboot poweroff
          losetup
-         od"
+         od
+         sed tr sort cp dirname basename"
 
 say() { echo "==> $*"; }
 die() { echo "build-initramfs: $*" >&2; exit 1; }
@@ -100,8 +105,17 @@ mkdir -p "$staging"/bin "$staging"/sbin "$staging"/proc "$staging"/sys \
          "$staging"/lib "$staging"/lib64 "$staging"/etc
 
 install -m 0755 "$(command -v busybox)" "$staging/bin/busybox"
-for a in $APPLETS; do
-    [ -e "$staging/bin/$a" ] || ln -s busybox "$staging/bin/$a"
+# Link EVERY applet this busybox has, not just $APPLETS. $APPLETS is the
+# minimum the preflight above insists on; the scripts use more (sed, tr,
+# dirname, basename...) and always have. On the Slate that never showed:
+# Ubuntu builds busybox with FEATURE_SH_STANDALONE, so its shell runs any
+# compiled-in applet whether or not a link exists. Debian's busybox (the
+# LOQ) does not - there, an unlinked applet is "not found", which broke
+# drive scanning (dirname) and external-drive boot (sed) on that machine
+# only. Linking the full list makes the image behave the same whichever
+# distro built it. Links into the one binary, so this costs no space.
+for a in $(busybox --list); do
+    [ -e "$staging/bin/$a" ] || [ -e "$staging/sbin/$a" ] || ln -s busybox "$staging/bin/$a"
 done
 # mdev lives in /sbin on most systems; init calls it bare so either works
 ln -sf ../bin/busybox "$staging/sbin/mdev"
