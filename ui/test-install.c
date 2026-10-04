@@ -9,6 +9,8 @@
 #include <sys/stat.h>
 #define main picker_real_main
 #include "nightfall.c"
+
+static void tap_test_click_cb(lv_event_t *e) { (*(int *)lv_event_get_user_data(e))++; }
 #undef main
 
 static int fails, passes;
@@ -1052,6 +1054,101 @@ int main(void) {
             tev.value = 18;
             trackpad_handle_event(&tc, &ts_noscale, &tev, &dx, &dy);
             ck(dx == 3000, "a device with no usable reported range falls back to a fixed divisor, not a crash");
+
+            {
+                /* Tap-to-click. Events carry kernel timestamps, so timing is
+                 * exact here: down at t=0, up at t (microseconds). */
+                struct nightfall_ctx pc = { .cw = 1000, .ch = 1000 };
+                struct input_src ps = { .code_x = ABS_MT_POSITION_X, .code_y = ABS_MT_POSITION_Y,
+                                        .abs_x = { .minimum = 0, .maximum = 1000 },
+                                        .abs_y = { .minimum = 0, .maximum = 1000 },
+                                        .last_x = -1, .last_y = -1 };
+                int tdx = 0, tdy = 0;
+                #define TAP_EV(t, c, v, us) do { struct input_event e_ = { .type = (t), .code = (c), .value = (v) }; \
+                    e_.input_event_sec = (us) / 1000000; e_.input_event_usec = (us) % 1000000; \
+                    trackpad_handle_event(&pc, &ps, &e_, &tdx, &tdy); } while (0)
+                g_mouse_seen = 1;   /* the pointer is already on screen */
+
+                pc.tap_click = 0;
+                TAP_EV(EV_ABS, ABS_MT_POSITION_X, 500, 0);
+                TAP_EV(EV_KEY, BTN_TOUCH, 1, 0);
+                TAP_EV(EV_ABS, ABS_MT_POSITION_X, 503, 40000);
+                TAP_EV(EV_KEY, BTN_TOUCH, 0, 90000);
+                ck(pc.tap_click == 1, "a quick, nearly still touch is a tap: a click is queued");
+                lv_indev_data_t idata = {0};
+                lv_indev_t *fake = lv_indev_create();
+                lv_indev_set_user_data(fake, &pc);
+                indev_read_cb(fake, &idata);
+                ck(idata.state == LV_INDEV_STATE_PRESSED, "LVGL's next read sees it pressed");
+                indev_read_cb(fake, &idata);
+                ck(idata.state == LV_INDEV_STATE_RELEASED && pc.tap_click == 0,
+                   "and the read after that released - one click, whenever LVGL samples");
+                indev_read_cb(fake, &idata);
+                ck(idata.state == LV_INDEV_STATE_RELEASED, "with nothing left over afterwards");
+                lv_indev_delete(fake);
+
+                pc.tap_click = 0;
+                TAP_EV(EV_KEY, BTN_TOUCH, 1, 1000000);
+                TAP_EV(EV_KEY, BTN_TOUCH, 0, 1000000 + 400000);
+                ck(pc.tap_click == 0, "a touch held 400ms is not a tap (resting a finger is not a click)");
+
+                pc.tap_click = 0;
+                TAP_EV(EV_ABS, ABS_MT_POSITION_X, 100, 2000000);
+                TAP_EV(EV_KEY, BTN_TOUCH, 1, 2000000);
+                TAP_EV(EV_ABS, ABS_MT_POSITION_X, 160, 2050000);
+                TAP_EV(EV_KEY, BTN_TOUCH, 0, 2100000);
+                ck(pc.tap_click == 0, "a quick flick that moved the pointer is not a tap");
+
+                pc.tap_click = 0;
+                TAP_EV(EV_KEY, BTN_TOUCH, 1, 3000000);
+                TAP_EV(EV_KEY, BTN_TOOL_DOUBLETAP, 1, 3010000);
+                TAP_EV(EV_KEY, BTN_TOUCH, 0, 3080000);
+                ck(pc.tap_click == 0, "a two-finger tap does nothing");
+
+                pc.tap_click = 0; pc.touch_down = 0;
+                TAP_EV(EV_KEY, BTN_TOUCH, 1, 4000000);
+                TAP_EV(EV_KEY, BTN_LEFT, 1, 4030000);
+                TAP_EV(EV_KEY, BTN_LEFT, 0, 4060000);
+                TAP_EV(EV_KEY, BTN_TOUCH, 0, 4090000);
+                ck(pc.tap_click == 0, "a physical click is not ALSO counted as a tap (no double click)");
+
+                {
+                    /* The whole chain through LVGL itself: a real button, a real
+                     * indev reading indev_read_cb, and a queued tap must produce
+                     * exactly one LV_EVENT_CLICKED on that button. */
+                    static int clicks;
+                    clicks = 0;
+                    lv_obj_t *prev_scr = lv_screen_active();
+                    lv_obj_t *scr = lv_obj_create(NULL);
+                    lv_screen_load(scr);
+                    lv_obj_t *btn = lv_button_create(scr);
+                    lv_obj_set_pos(btn, 100, 100);
+                    lv_obj_set_size(btn, 200, 100);
+                    lv_obj_add_event_cb(btn, tap_test_click_cb, LV_EVENT_CLICKED, &clicks);
+                    lv_obj_update_layout(scr);
+                    lv_indev_t *real = lv_indev_create();
+                    lv_indev_set_type(real, LV_INDEV_TYPE_POINTER);
+                    lv_indev_set_read_cb(real, indev_read_cb);
+                    lv_indev_set_user_data(real, &pc);
+                    pc.touch_x = 200; pc.touch_y = 150; pc.touch_down = 0; pc.tap_click = 0;
+                    lv_indev_read(real); lv_indev_read(real);
+                    pc.tap_click = 1;
+                    lv_indev_read(real);
+                    lv_indev_read(real);
+                    lv_indev_read(real);
+                    ck(clicks == 1, "through LVGL itself: a queued tap clicks the button under the pointer exactly once");
+                    lv_indev_delete(real);
+                    lv_screen_load(prev_scr);   /* never delete the ACTIVE screen - later tests draw on it */
+                    lv_obj_delete(scr);
+                }
+
+                g_mouse_seen = 0; pc.tap_click = 0;
+                TAP_EV(EV_KEY, BTN_TOUCH, 1, 5000000);
+                TAP_EV(EV_KEY, BTN_TOUCH, 0, 5050000);
+                ck(pc.tap_click == 0 && pc.touch_x == 500 && pc.touch_y == 500,
+                   "the first tap, before the pointer was ever shown, only shows it - in the middle, no click");
+                #undef TAP_EV
+            }
 
             dx = 0; dy = 0;
             struct input_event cev = { .type = EV_KEY, .code = BTN_LEFT, .value = 1 };

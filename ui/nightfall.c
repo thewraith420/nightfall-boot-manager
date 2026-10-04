@@ -714,6 +714,9 @@ struct nightfall_ctx {
     int cw, ch; /* logical dims, as passed to lv_display_create */
     lv_indev_t *indev;
     int touch_x, touch_y, touch_down;
+    /* A trackpad tap, delivered as one click: 1 = report PRESSED on the
+     * next LVGL read, 2 = pressed was reported, report RELEASED next. */
+    int tap_click;
 };
 
 /* TEMPORARY diagnostic, NIGHTFALL_DEBUG_INPUT only - bobzkernel-79 asked for
@@ -911,6 +914,12 @@ static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     struct nightfall_ctx *ctx = lv_indev_get_user_data(indev);
     data->point.x = ctx->touch_x;
     data->point.y = ctx->touch_y;
+    /* A tap is a press AND a release in the same instant, and LVGL only
+     * samples this every refresh period - so a tap is spread over two
+     * reads: pressed on one, released on the next. That way LVGL always
+     * sees it, with no timing to tune. */
+    if (ctx->tap_click == 1) { data->state = LV_INDEV_STATE_PRESSED; ctx->tap_click = 2; return; }
+    if (ctx->tap_click == 2) { data->state = LV_INDEV_STATE_RELEASED; ctx->tap_click = 0; return; }
     data->state = ctx->touch_down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
@@ -3693,6 +3702,10 @@ struct input_src {
     struct input_absinfo abs_x, abs_y;
     int last_x, last_y;
     int rem_x, rem_y;       /* trackpad: the fraction of a pixel not yet moved */
+    /* trackpad tap-to-click, for the touch currently in progress */
+    int tap_ok;             /* still a tap candidate */
+    long long tap_t0_us;    /* when the finger came down (kernel event time) */
+    long tap_travel;        /* how far it has moved since, in pad units */
 };
 static struct input_src g_inputs[MAX_INPUTS];
 static int g_input_n;
@@ -3813,6 +3826,7 @@ static int inputs_rescan(void) {
             g_inputs[g_input_n].last_y = -1;
             g_inputs[g_input_n].rem_x = 0;   /* slots are reused after an unplug */
             g_inputs[g_input_n].rem_y = 0;
+            g_inputs[g_input_n].tap_ok = 0;
         }
         g_input_n++;
         added++;
@@ -4105,6 +4119,32 @@ static int mouse_handle_event(struct nightfall_ctx *ctx, const struct input_even
  * over from wherever the last finger happened to lift - that reads as a
  * single large, unwanted jump exactly once per touch-down otherwise. */
 #define TRACKPAD_SWEEPS_PER_SCREEN 2
+
+/* Tap-to-click, the way a desktop does it: a touch that lifts quickly and
+ * barely moved is a click at the pointer. 180ms is libinput's own tap
+ * timeout. "Barely moved" is 2% of the pad's shorter side, so it means the
+ * same physical distance on any pad (with a fixed fallback when the pad
+ * reports no usable range).
+ *
+ * The very first tap, before the pointer has ever been shown, only shows
+ * it - in the middle of the screen - rather than clicking whatever happens
+ * to be under a pointer nobody could see yet. */
+#define TAP_MAX_US 180000
+static int trackpad_tap_end(struct nightfall_ctx *ctx, struct input_src *src, const struct input_event *ev) {
+    if (!src->tap_ok) return 0;
+    src->tap_ok = 0;
+    long long t1 = (long long)ev->input_event_sec * 1000000 + ev->input_event_usec;
+    int range_x = src->abs_x.maximum - src->abs_x.minimum;
+    int range_y = src->abs_y.maximum - src->abs_y.minimum;
+    int pad_short = (range_x > 0 && range_y > 0) ? (range_x < range_y ? range_x : range_y) : 0;
+    long max_travel = pad_short > 0 ? pad_short / 50 : 10;
+    if (t1 - src->tap_t0_us > TAP_MAX_US || src->tap_travel > max_travel) return 0;
+    if (!g_mouse_seen) { mouse_move(ctx, 0, 0); return 1; }
+    mouse_cursor_show(ctx);
+    ctx->tap_click = 1;
+    return 1;
+}
+
 static int trackpad_handle_event(struct nightfall_ctx *ctx, struct input_src *src,
                                   const struct input_event *ev, int *dx, int *dy) {
     if (ev->type == EV_ABS) {
@@ -4122,22 +4162,42 @@ static int trackpad_handle_event(struct nightfall_ctx *ctx, struct input_src *sr
         long scale_den = (long)(pad_short > 0 ? pad_short * TRACKPAD_SWEEPS_PER_SCREEN : 8) * POINTER_SPEED_DEN;
         long scale_num = (long)screen_short * POINTER_SPEED_NUM;
         if (is_x) {
-            if (src->last_x >= 0) scale_carry((long)(ev->value - src->last_x) * scale_num, scale_den, &src->rem_x, dx);
+            if (src->last_x >= 0) {
+                scale_carry((long)(ev->value - src->last_x) * scale_num, scale_den, &src->rem_x, dx);
+                src->tap_travel += labs((long)(ev->value - src->last_x));
+            }
             src->last_x = ev->value;
         } else {
-            if (src->last_y >= 0) scale_carry((long)(ev->value - src->last_y) * scale_num, scale_den, &src->rem_y, dy);
+            if (src->last_y >= 0) {
+                scale_carry((long)(ev->value - src->last_y) * scale_num, scale_den, &src->rem_y, dy);
+                src->tap_travel += labs((long)(ev->value - src->last_y));
+            }
             src->last_y = ev->value;
         }
         return 1;
+    }
+    if (ev->type == EV_KEY && ev->code == BTN_TOUCH && ev->value == 1) {
+        src->tap_ok = 1;
+        src->tap_t0_us = (long long)ev->input_event_sec * 1000000 + ev->input_event_usec;
+        src->tap_travel = 0;
+        return 0;
     }
     if (ev->type == EV_KEY && ev->code == BTN_TOUCH && ev->value == 0) {
         src->last_x = -1;
         src->last_y = -1;
         src->rem_x = 0;
         src->rem_y = 0;
+        return trackpad_tap_end(ctx, src, ev);
+    }
+    /* Two or more fingers is never a tap (and not a right-click either:
+     * nothing in this UI uses one). */
+    if (ev->type == EV_KEY && ev->value == 1 &&
+        (ev->code == BTN_TOOL_DOUBLETAP || ev->code == BTN_TOOL_TRIPLETAP || ev->code == BTN_TOOL_QUADTAP)) {
+        src->tap_ok = 0;
         return 0;
     }
     if (ev->type == EV_KEY && ev->code == BTN_LEFT) {
+        src->tap_ok = 0;            /* a real click: never also count the touch as a tap */
         ctx->touch_down = ev->value != 0;
         if (ev->value) mouse_cursor_show(ctx);
         return ev->value != 0;
