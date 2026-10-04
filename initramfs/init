@@ -173,6 +173,16 @@ save_log() {
         echo "--- drive scans (startup and every Rescan) ---"
         if [ -s /run/nightfall/scan.log ]; then cat /run/nightfall/scan.log; else echo "(no scan output)"; fi
         echo
+        # What the two external-boot paths printed when they were tried -
+        # the drive's efibootmgr calls and the ISO's kexec steps. Both went
+        # only to the screen before, so a failure was unrecoverable from the
+        # log afterwards.
+        echo "--- external drive (BootNext) attempts ---"
+        if [ -s /run/nightfall/boot-external.log ]; then cat /run/nightfall/boot-external.log; else echo "(none)"; fi
+        echo
+        echo "--- live ISO attempts ---"
+        if [ -s /run/nightfall/live-boot.log ]; then cat /run/nightfall/live-boot.log; else echo "(none)"; fi
+        echo
         echo "--- selection ---"
         # "user" vs "timeout" matters: a boot where the panel stayed
         # dark and the timeout fired looks, downstream, exactly like one
