@@ -177,12 +177,6 @@ struct backup {
     char size[16];
 };
 
-struct live_iso {
-    char path[256];   /* relative to the drive's own root, e.g. "isos/ubuntu.iso" */
-    char size[16];
-    char name[128];   /* bare filename, for display */
-};
-
 /* A whole external drive that can be handed to FIRMWARE to boot next -
  * a Ventoy stick, another live-USB tool's drive, or a separate OS on an
  * external disk - found by discover-bootable-drives.sh. `loader` is the
@@ -319,25 +313,6 @@ static int load_bootable_drives(const char *path, struct bootable_drive *d, int 
         snprintf(d[n].loader, sizeof(d[n].loader), "%.63s", f[1]);
         snprintf(d[n].label, sizeof(d[n].label), "%.63s", f[2] ? f[2] : "");
         snprintf(d[n].size, sizeof(d[n].size), "%.15s", f[3] ? f[3] : "?");
-        n++;
-    }
-    fclose(fp);
-    return n;
-}
-
-/* path\tsize\tname, one per line - discover-live-isos.sh's own contract. */
-static int load_live_isos(const char *path, struct live_iso *isos, int max) {
-    FILE *fp = fopen(path, "r");
-    if (!fp) return 0;
-    char line[600];
-    int n = 0;
-    while (n < max && fgets(line, sizeof(line), fp)) {
-        line[strcspn(line, "\n")] = '\0';
-        char *f[3] = {0};
-        if (split_tsv(line, f, 3) < 1 || !f[0] || !*f[0]) continue;
-        snprintf(isos[n].path, sizeof(isos[n].path), "%.255s", f[0]);
-        snprintf(isos[n].size, sizeof(isos[n].size), "%.15s", f[1] ? f[1] : "?");
-        snprintf(isos[n].name, sizeof(isos[n].name), "%.127s", f[2] ? f[2] : f[0]);
         n++;
     }
     fclose(fp);
@@ -2100,55 +2075,6 @@ static int rescan_drives(void) {
     return 0;
 }
 
-static struct live_iso *g_live_isos;
-static int g_live_iso_n;
-
-static const char *live_isos_script(void) {
-    const char *s = getenv("NIGHTFALL_LIVE_ISOS_SH");
-    return s ? s : "/bin/discover-live-isos.sh";
-}
-
-/* Lists the ISO files on ONE drive, on demand rather than as part of
- * scan-drives.sh's own sweep. Deliberately not folded into the periodic
- * rescan: unlike backups, a drive can carry several large ISOs, and
- * nobody needs that list until they actually open "Boot a live USB" for
- * that specific drive.
- *
- * discover-live-isos.sh writes to STDOUT (same contract as
- * discover-backups.sh), so unlike scan-drives.sh this redirects the
- * child's own stdout to a fixed scratch file rather than passing an
- * output path as an argument - there was no existing convention worth
- * inventing a second one to avoid. */
-static char g_live_isos_path[256];
-
-static int scan_live_isos(const char *dev) {
-    const char *script = live_isos_script();
-    if (access(script, X_OK) != 0) return -1;
-
-    const char *override = getenv("NIGHTFALL_LIVE_ISOS_TSV");
-    snprintf(g_live_isos_path, sizeof(g_live_isos_path), "%s",
-             override ? override : "/run/nightfall/live-isos.tsv");
-
-    pid_t pid = fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        int fd = open(g_live_isos_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd >= 0) dup2(fd, STDOUT_FILENO);
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) dup2(devnull, STDERR_FILENO);
-        execl(script, script, dev, (char *)NULL);
-        _exit(127);
-    }
-    int st = 0;
-    waitpid(pid, &st, 0);
-    if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) return -1;
-
-    static struct live_iso isos[64];
-    g_live_iso_n = load_live_isos(g_live_isos_path, isos, 64);
-    g_live_isos = g_live_iso_n ? isos : NULL;
-    return 0;
-}
-
 static const char *backup_script(void) {
     const char *s = getenv("NIGHTFALL_BACKUP_SH");
     return s ? s : "/bin/backup-system.sh";
@@ -2680,8 +2606,6 @@ static void show_restore_list(void);
 static void show_delete_backup_list(void);
 static void show_rename_backup_list(void);
 static void show_repair_menu(void);
-static void show_live_boot_targets(void);
-static void show_live_iso_list(void);
 static void restart_cb(lv_event_t *e);
 static void poweroff_cb(lv_event_t *e);
 
@@ -2819,8 +2743,7 @@ static void rescan_cb(lv_event_t *e) {
  * installed on an external disk. See boot-external-drive.sh's own header
  * for the mechanism (a one-shot UEFI BootNext entry).
  *
- * Unlike Boot a live USB, this is NOT a kexec and does not end this
- * process the way a kernel choice does: boot-external-drive.sh only arms
+ * This is NOT a kexec, unlike a kernel choice: boot-external-drive.sh only arms
  * BootNext, and getting to the drive from there needs an actual reboot -
  * init performs it, the same reboot sequence Restart already uses, once
  * BootNext is confirmed armed. See initramfs/init. */
@@ -2828,7 +2751,7 @@ static int g_boot_external;
 static char g_boot_external_part[128];
 static char g_boot_external_loader[64];
 
-/* The testable core, same split as confirm_live_boot(): the *_cb wrapper
+/* The testable core, same split as kernel_row_tapped(): the *_cb wrapper
  * only unwraps the LVGL event, this does the actual work. */
 static void confirm_boot_external(int idx) {
     snprintf(g_boot_external_part, sizeof(g_boot_external_part), "%.127s", g_bootable[idx].dev);
@@ -3052,131 +2975,6 @@ static void show_backup_targets(void) {
     }
 }
 
-/* ---------------- Boot a specific ISO ----------------
- *
- * kexec straight into a live image found on a drive, via
- * boot-live-iso.sh. Two taps deep because it is genuinely two choices -
- * which drive, then which ISO on it - and unlike backups there is
- * nothing to list until a drive is picked.
- *
- * Lives in the main Boot screen, NOT Back up/Restore - it ended up there
- * only because that was the first screen with a drive list to reuse, and
- * Bob later called that placement a mistake: booting is the Boot
- * screen's job, backup/restore is unrelated to it. Moved 2026-10-03.
- * It sits next to the "Boot an external drive" BootNext rows there
- * (see boot-external-drive.sh), which is exactly why the wording has to
- * carry the distinction on its own: BootNext hands the WHOLE drive to
- * firmware - a Ventoy stick still shows its own menu, another live-USB
- * tool's drive boots whatever it normally would. This instead kexecs
- * Nightfall straight into ONE specific .iso file's own kernel+initrd, no
- * firmware reboot, no menu of any kind in between - so every label here
- * says "a specific ISO", never "a live USB" (the old wording, which read
- * as a synonym for the row right next to it), to keep the two from
- * reading as the same feature.
- *
- * This ends the running Nightfall process rather than returning to the
- * menu, the same shape as Restart/Power off/a normal kernel choice, not
- * the "child runs, progress shows, menu comes back" shape backup/repair
- * use - because it IS a boot, and deserves the same on-screen treatment,
- * except for one deliberate difference: no booting splash. See
- * boot-live-iso.sh's own header for why it stays verbose. */
-static int g_live_boot;
-static char g_live_target_dev[128];
-static char g_live_iso_path[256];
-
-/* The testable core, same split as start_restore()/start_rename_backup():
- * the *_cb wrapper only unwraps the LVGL event, this does the actual
- * work. Ends the running Nightfall process via the main loop's break
- * condition, the same way choosing a kernel or tapping Restart does -
- * there is no child to watch, so unlike backup/restore/repair there is
- * no start_* launcher either, just this. */
-static void confirm_live_boot(int idx) {
-    snprintf(g_live_iso_path, sizeof(g_live_iso_path), "%s", g_live_isos[idx].path);
-    g_live_boot = 1;
-}
-
-static void live_iso_go_cb(lv_event_t *e) {
-    lv_obj_t *mbox = lv_event_get_user_data(e);
-    int idx = (int)(intptr_t)lv_obj_get_user_data(mbox);
-    lv_msgbox_close_async(mbox);
-    confirm_live_boot(idx);
-}
-
-/* Testable core, same split as kernel_row_tapped(): 1 if the confirm opened,
- * 0 if this kexec is refused under lockdown and a notice was shown instead. */
-static int live_iso_tapped(int idx) {
-    if (kexec_blocked_reason()) { show_kexec_blocked_notice(); return 0; }
-    char body[400];
-    snprintf(body, sizeof(body),
-             "%.60s  (%.16s)\n\n"
-             "Boots straight into this image - nothing on this machine "
-             "changes, and Nightfall is not touched.\n\n"
-             "This is a rescue boot, so it is not quiet: if the live "
-             "system has trouble finding itself after the handoff, you "
-             "will see it happen rather than stare at a blank screen.",
-             g_live_isos[idx].name, g_live_isos[idx].size);
-    simple_confirm(idx, "Boot this image?", body, "Boot", live_iso_go_cb, 0);
-    screenshot_soon("boot-live-iso-dialog");
-    return 1;
-}
-
-static void live_iso_click_cb(lv_event_t *e) {
-    live_iso_tapped((int)(intptr_t)lv_event_get_user_data(e));
-}
-
-static void show_live_iso_list(void) {
-    lv_obj_clean(g_list);
-    lv_label_set_text(g_header, LV_SYMBOL_USB "  Boot a specific ISO");
-    add_back_row(show_live_boot_targets);
-
-    if (g_live_iso_n == 0) {
-        lv_obj_t *l = lv_label_create(g_list);
-        lv_label_set_text(l, "No ISO files found on this drive.\n\n"
-                             "Looked at the top level and one folder\n"
-                             "down. A Ventoy stick works as-is; other\n"
-                             "drives just need the .iso file copied on.");
-        lv_obj_set_style_text_color(l, lv_color_hex(0x93a0aa), 0);
-        return;
-    }
-    for (int i = 0; i < g_live_iso_n; i++) {
-        char row[240];
-        snprintf(row, sizeof(row), "%.60s   %.10s", g_live_isos[i].name, g_live_isos[i].size);
-        lv_obj_t *b = make_row(LV_SYMBOL_USB, row, 0);
-        lv_obj_add_event_cb(b, live_iso_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-    }
-}
-
-static void live_target_click_cb(lv_event_t *e) {
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    snprintf(g_live_target_dev, sizeof(g_live_target_dev), "%s", g_targets[idx].dev);
-
-    /* Same treatment as Rescan: say what is happening and force a
-     * repaint before the blocking scan, since this display is driven
-     * manually and would otherwise just sit still with no explanation. */
-    lv_obj_t *btn = lv_event_get_target(e);
-    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
-    if (lbl) lv_label_set_text(lbl, LV_SYMBOL_USB "  Looking for ISO files...");
-    lv_refr_now(NULL);
-
-    scan_live_isos(g_live_target_dev);
-    show_live_iso_list();
-}
-
-static void show_live_boot_targets(void) {
-    lv_obj_clean(g_list);
-    lv_label_set_text(g_header, LV_SYMBOL_USB "  Boot an ISO from which drive?");
-    add_back_row(show_kernel_list);
-
-    for (int i = 0; i < g_target_n; i++) {
-        char row[220];
-        snprintf(row, sizeof(row), "%.40s  %.10s  %.10s free",
-                 g_targets[i].label[0] ? g_targets[i].label : g_targets[i].dev,
-                 g_targets[i].fstype, g_targets[i].freespace);
-        lv_obj_t *b = make_row(LV_SYMBOL_DRIVE, row, 0);
-        lv_obj_add_event_cb(b, live_target_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-    }
-}
-
 static void show_restore_list(void) {
     lv_obj_clean(g_list);
     lv_label_set_text(g_header, LV_SYMBOL_UPLOAD "  Restore a backup");
@@ -3347,23 +3145,6 @@ static void show_kernel_list(void) {
                  g_bootable[i].size);
         lv_obj_t *b = make_row(LV_SYMBOL_DRIVE, row, 0);
         lv_obj_add_event_cb(b, boot_external_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-    }
-
-    /* Deliberately NOT worded like the rows above: those hand the WHOLE
-     * drive to firmware (a Ventoy stick still shows its own menu). This
-     * kexecs Nightfall straight into ONE specific .iso file's own
-     * kernel+initrd, no firmware reboot involved - "Boot ISO" next to
-     * "Boot Drive" is the whole point of the wording, so it can't be
-     * mistaken for the row above it. Same reused drive list as Back
-     * up/Restore, for the same reason that menu's own row used to: the
-     * drive cannot be present at boot, so Rescan above is how it gets
-     * here either way. */
-    {
-        char row[64];
-        snprintf(row, sizeof(row), "Boot ISO   (%d drive%s found)",
-                 g_target_n, g_target_n == 1 ? "" : "s");
-        lv_obj_t *b = make_row(LV_SYMBOL_USB, row, g_target_n == 0);
-        lv_obj_add_event_cb(b, nav_cb, LV_EVENT_CLICKED, (void *)show_live_boot_targets);
     }
 }
 
@@ -4703,7 +4484,7 @@ int main(int argc, char **argv) {
             install_pump(inst_buf, sizeof(inst_buf), &inst_len);
         }
 
-        if (g_selected >= 0 || g_install >= 0 || g_reload || g_power_action || g_live_boot || g_boot_external) break;
+        if (g_selected >= 0 || g_install >= 0 || g_reload || g_power_action || g_boot_external) break;
 
         if (touch_idx >= 0 && (fds[touch_idx].revents & POLLIN)) {
             struct input_event ev;
@@ -4853,20 +4634,6 @@ int main(int argc, char **argv) {
     if (g_power_action) {
         shell_quote(stdout, "POWER_ACTION", g_power_action);
         fprintf(stderr, "nightfall: %s requested\n", g_power_action);
-        return 0;
-    }
-
-    if (g_live_boot) {
-        /* Its own contract, not SELECTED_LINUX: the vmlinuz/initrd live
-         * inside a loop-mounted ISO on an external drive, not at a
-         * real-root-relative /boot path the way every other selection
-         * here does, so init needs a different script and different
-         * arguments to act on this - see initramfs/init and
-         * boot-live-iso.sh. */
-        shell_quote(stdout, "LIVE_BOOT_TARGET", g_live_target_dev);
-        shell_quote(stdout, "LIVE_BOOT_ISO", g_live_iso_path);
-        fprintf(stderr, "nightfall: live-USB boot requested: %s on %s\n",
-                g_live_iso_path, g_live_target_dev);
         return 0;
     }
 

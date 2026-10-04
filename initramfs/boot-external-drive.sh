@@ -9,21 +9,21 @@
 # /dev/sda1) and the UEFI removable-media fallback loader path on it
 # (e.g. '\EFI\BOOT\BOOTX64.EFI').
 #
-# WHY THIS EXISTS: boot-live-iso.sh only understands two specific live-USB
-# layouts (casper, live-boot) reached by loop-mounting a .iso file - which
-# is narrower than what was actually asked for: boot a Ventoy stick (which
-# then shows VENTOY'S OWN menu), any other live-USB-creation-tool drive,
-# or a whole separate OS installed on an external disk. None of those are
-# things Nightfall should try to parse - an installed OS has no ISO to
-# loop-mount at all. The generic answer is the same one pressing F12 gives
+# WHY THIS EXISTS: boot a Ventoy stick (which then shows VENTOY'S OWN
+# menu), any other live-USB-creation-tool drive, or a whole separate OS
+# installed on an external disk. None of those are things Nightfall should
+# try to parse. It once tried, for single ISO files (boot-live-iso.sh,
+# removed 2026-10-03): live systems cannot read the exFAT a Ventoy stick
+# uses while they start, and a Ventoy-style workaround passed in QEMU but
+# failed on real hardware - so Ventoy itself, reached through this, is
+# the one way to boot an ISO. The generic answer is the same one pressing F12 gives
 # with a keyboard: tell firmware which device to boot next, then get out
 # of the way entirely and let ITS bootloader (Ventoy's grub, the live
 # distro's own, the installed OS's own) take it from there.
 #
 # HOW: efibootmgr creates a fresh UEFI boot entry pointing at the loader
 # already found on the drive, arms it with BootNext (one-shot), and this
-# script's job ends there - init still owns the actual reboot, the same
-# way boot-live-iso.sh does the kexec but init decides when to call it.
+# script's job ends there - init still owns the actual reboot.
 #
 # BootOrder is deliberately put back exactly as found. `efibootmgr -c`
 # does NOT leave BootOrder alone - confirmed on real hardware, contrary

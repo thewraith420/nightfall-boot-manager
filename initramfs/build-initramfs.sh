@@ -34,7 +34,6 @@ APPLETS="sh mount umount mkdir echo printf cut head awk cat ls
          sleep dmesg uname tail sync date wc grep
          tar chroot tee rm df mv
          reboot poweroff
-         losetup
          od
          sed tr sort cp dirname basename"
 
@@ -85,7 +84,6 @@ for f in "$here/init" "$here/discover-kernels.sh" "$here/apply-default.sh" \
          "$here/rename-backup.sh" "$here/fsck-root.sh" \
          "$here/repair-system.sh" "$here/clear-overrides.sh" \
          "$here/discover-backups.sh" "$here/scan-drives.sh" \
-         "$here/discover-live-isos.sh" "$here/boot-live-iso.sh" \
          "$here/discover-bootable-drives.sh" "$here/boot-external-drive.sh" \
          "$here/find-real-root.sh" "$here/kexec-preflight.sh" \
          "$here/discover-bls.sh" \
@@ -146,8 +144,6 @@ install -m 0755 "$here/repair-system.sh"           "$staging/bin/repair-system.s
 install -m 0755 "$here/clear-overrides.sh"         "$staging/bin/clear-overrides.sh"
 install -m 0755 "$here/discover-backups.sh"         "$staging/bin/discover-backups.sh"
 install -m 0755 "$here/scan-drives.sh"              "$staging/bin/scan-drives.sh"
-install -m 0755 "$here/discover-live-isos.sh"       "$staging/bin/discover-live-isos.sh"
-install -m 0755 "$here/boot-live-iso.sh"            "$staging/bin/boot-live-iso.sh"
 install -m 0755 "$here/discover-bootable-drives.sh" "$staging/bin/discover-bootable-drives.sh"
 install -m 0755 "$here/boot-external-drive.sh"      "$staging/bin/boot-external-drive.sh"
 install -m 0755 "$here/find-real-root.sh"           "$staging/bin/find-real-root.sh"

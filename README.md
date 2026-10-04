@@ -252,12 +252,8 @@ and tested in the harness; they have simply never met the hardware.
 - **Backup is Slate-only.** The Back up / Restore menu row is hidden on any
   board that does not identify itself as a Nocturne (an unreadable board
   name keeps it, so the Slate can never lose it to a missing sysfs file).
-  `/boot/nightfall-backup` (`1`/`0`) overrides it either way. *Boot a
-  specific ISO* used to live under that menu and was hidden by this same
-  gate as a side effect, which was wrong - it has nothing to do with
-  backups and is just as useful on a generic PC. Moved to the **Boot**
-  screen (2026-10-03), alongside booting a drive outright; neither is
-  gated by this setting.
+  `/boot/nightfall-backup` (`1`/`0`) overrides it either way. Booting a
+  drive from the **Boot** screen is not gated by it.
 - **A root Nightfall can find and read.** `find-real-root.sh` walks every
   partition looking for the one stamped with this exact build, recognising
   **ext4, xfs, btrfs or f2fs** from the superblock (each mounted read-only
@@ -483,16 +479,11 @@ bash initramfs/test-fsck-root.sh       # unmount/remount, e2fsck's exit bitmask
 bash initramfs/test-repair.sh          # dpkg/clean/grub, and clearing overrides
 bash initramfs/test-cmdline.sh
 bash initramfs/test-discover-kernels.sh
-bash initramfs/test-discover-live-isos.sh
-bash initramfs/test-boot-live-iso.sh   # kexec -l before any unmount, everything
-                                       # torn down before kexec -e - the actual
-                                       # point of no return - and both against
-                                       # mocks, since no kernel can mount an ISO
                                        # here yet (see Recovery, below)
 
 # Headless LVGL: keyboard z-order, dialog and keyboard layout, the 2x2 confirm
 # grid, child-process plumbing, flush-vs-touch rotation agreement, the
-# accelerometer mapping, and the live-USB/external-drive discover/confirm flows.
+# accelerometer mapping, and the external-drive discover/confirm flow.
 cd ui && make test
 ```
 
@@ -664,38 +655,15 @@ accumulate NVRAM clutter.
 > same way every other shell script here is, but nobody has armed a real
 > `BootNext` from it yet.
 
-**Boot a specific ISO** (`Boot → Boot ISO`, formerly `Back up / Restore →
-Boot a live USB` until 2026-10-03, briefly `Boot a specific ISO on a
-drive` before that) is the earlier,
-narrower answer to the same problem, kept as a secondary option rather than
-removed: loop-mount a `.iso` file as `iso9660` and `kexec` straight into the
-kernel and initrd found inside it, the same trick GRUB+Ventoy use to boot an
-ISO that was never extracted. The row no longer says "USB" at all (the old
-`Boot a live USB` label read as a synonym for the BootNext rows next to it
-now) - those hand the *whole* drive to firmware (a Ventoy stick still shows
-its own menu); this kexecs straight into *one specific .iso file*, no
-firmware reboot involved, and every label in this flow says "a specific
-ISO" rather than "a live USB" to keep the two from reading as the same
-feature. Detects
-Ubuntu and derivatives (`casper`) and Debian Live (`live-boot`); anything
-else is refused by name rather than guessed at, since a wrong guess here is
-a kexec into a kernel with no idea how to find its own root. Deliberately
-not quiet: this is a rescue boot, so trouble finding or mounting the ISO
-after the handoff has to be visible, not
-hidden behind Nightfall's usual splash. Where **Boot an external drive**
-hands the whole drive to firmware sight unseen, this one is for the
-narrower case of a specific `.iso` file sitting on an otherwise-ordinary
-drive.
-
-> **Needs `CONFIG_ISO9660_FS` (+ `JOLIET`, `UDF_FS`) in the picker kernel.**
-> All three were simply absent from the picker's config — same shape as the
-> touch and auto-rotate bugs, where a whole feature was invisible rather
-> than merely broken. The config change has been built and its IKCONFIG
-> re-verified, but nobody has booted it and mounted a real ISO with it yet.
-> Everything else here — discovery, detection, the kexec construction, and
-> the ordering that keeps a refusal from leaving anything half-mounted — is
-> written and tested against mocks, the same way the accelerometer code was
-> built and tested before the kernel that could read one existed.
+**Booting a single ISO file was removed (2026-10-03).** It loop-mounted
+one `.iso` and kexec'd into the kernel inside it, but the live system then
+has to find that ISO again on its own, and live systems cannot read exFAT
+while they start - the filesystem every Ventoy stick uses. A Ventoy-style
+workaround (mapping the ISO's raw sectors into a device-mapper disk inside
+the live system) passed in QEMU but failed on real hardware, so it was
+dropped in favour of the drive boot above: picking a Ventoy stick there
+brings up Ventoy's own menu, which boots every ISO on it, Windows and
+macOS included.
 
 **Restart and Power off** exist because there was otherwise no way to leave
 without booting a kernel — on a keyboardless tablet that meant holding the

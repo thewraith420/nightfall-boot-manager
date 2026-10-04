@@ -180,9 +180,6 @@ save_log() {
         echo "--- external drive (BootNext) attempts ---"
         if [ -s /run/nightfall/boot-external.log ]; then cat /run/nightfall/boot-external.log; else echo "(none)"; fi
         echo
-        echo "--- live ISO attempts ---"
-        if [ -s /run/nightfall/live-boot.log ]; then cat /run/nightfall/live-boot.log; else echo "(none)"; fi
-        echo
         echo "--- selection ---"
         # "user" vs "timeout" matters: a boot where the panel stayed
         # dark and the timeout fired looks, downstream, exactly like one
@@ -771,18 +768,11 @@ install_rounds=0
 # a Nightfall that crashed instantly and kept asking to reload must not
 # become a boot loop either.
 reload_rounds=0
-# A live-USB boot has genuine, ordinary ways to fail - the drive gets
-# unplugged mid-mount, the ISO turns out not to be a supported live
-# image - none of which are a reason to strand the machine. Bounded for
-# the same reason as the other two: a request that somehow kept
-# re-firing must not become a loop that never lets the menu back on
-# screen.
-live_boot_rounds=0
-# Arming a firmware boot has the same genuine, ordinary failure modes as
-# a live-USB boot (drive unplugged, efibootmgr refuses) plus one of its
-# own (no efivarfs - see the mount attempt above) - bounded for the same
-# reason: a repeating request must not become a loop the menu never
-# comes back from.
+# Arming a firmware boot has genuine, ordinary ways to fail (drive
+# unplugged, efibootmgr refuses, no efivarfs - see the mount attempt
+# above), none of which are a reason to strand the machine - bounded for
+# the same reason as the other two: a repeating request must not become
+# a loop the menu never comes back from.
 boot_external_rounds=0
 while :; do
 stage "running nightfall"
@@ -796,8 +786,6 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
     INSTALL_TARBALL=
     RELOAD=
     POWER_ACTION=
-    LIVE_BOOT_TARGET=
-    LIVE_BOOT_ISO=
     BOOT_EXTERNAL_PART=
     BOOT_EXTERNAL_LOADER=
     SET_CMDLINE=
@@ -832,59 +820,18 @@ if /bin/nightfall /run/nightfall/menu.tsv /run/nightfall/tarballs.tsv "$CMDLINE_
         rescue "$POWER_ACTION did not take effect"
     fi
 
-    # Boot a live USB - a Ventoy-style rescue image on an external drive.
-    # A DIFFERENT contract from SELECTED_LINUX/INITRD/CMDLINE below: that
-    # one names a real kernel at a path relative to /mnt/root, and this
-    # one names a partition plus a path INSIDE an ISO file loop-mounted
-    # from it - reusing kexec-boot.sh's argument shape would only make
-    # both scripts pretend those are the same kind of thing.
-    #
-    # Deliberately NOT exec'd. The handoff below can exec into
-    # kexec-boot.sh because by the time it runs, SELECTED_LINUX has
-    # already been validated hard enough that a failure there would be an
-    # init BUG, not user error - see the file header. boot-live-iso.sh
-    # has no such guarantee: this runs as a normal command, so a failure
-    # returns to the menu rather than taking PID 1 down with it.
-    if [ -n "$LIVE_BOOT_TARGET" ]; then
-        live_boot_rounds=$((live_boot_rounds + 1))
-        # continue lives ONLY inside this branch, same shape as
-        # INSTALL_TARBALL below. Put outside the if/else it would
-        # unconditionally re-loop even after the leash trips - a request
-        # that keeps repeating would spin here forever instead of ever
-        # reaching "booting instead", since nothing about the loop
-        # changes between rounds to make it stop on its own.
-        if [ "$live_boot_rounds" -le 3 ]; then
-            stage "booting a specific ISO: $LIVE_BOOT_ISO on $LIVE_BOOT_TARGET"
-            echo "" >&2
-            echo "nightfall: booting a live image - this can take a minute." >&2
-            # No install.rc-style dance needed here, unlike
-            # install-kernel.sh's invocation: this never branches on the
-            # exit status, because SUCCESS NEVER RETURNS - boot-live-iso.sh's
-            # own kexec -e replaces this whole process. Reaching the line
-            # after the pipe at all, for any reason, already means it did
-            # not take - so there is no status left for tee to mask.
-            /bin/boot-live-iso.sh "$LIVE_BOOT_TARGET" "$LIVE_BOOT_ISO" 2>&1 \
-                | tee -a /run/nightfall/live-boot.log >&2
-            warn "live-USB boot did not take - see the messages above"
-            echo "nightfall: nothing on this machine was changed." >&2
-            sleep "${NIGHTFALL_FALLBACK_PAUSE:-8}"
-            continue
-        fi
-        warn "too many live-USB boot attempts - booting instead"
-    fi
-
     # Boot an external drive - hand the WHOLE drive to firmware instead of
     # trying to understand what's on it (a Ventoy stick, another live-USB
     # tool's drive, a separate OS on a USB disk). Its own contract, not
-    # LIVE_BOOT_TARGET: this names a partition plus the loader path
-    # firmware should run, not a kernel/initrd/ISO. See
+    # SELECTED_LINUX: this names a partition plus the loader path
+    # firmware should run, not a kernel/initrd. See
     # boot-external-drive.sh's own header for the mechanism.
     #
-    # Unlike live-USB boot, success here does NOT end in a kexec -
+    # Unlike a kernel boot, success here does NOT end in a kexec -
     # boot-external-drive.sh only arms a one-shot UEFI BootNext entry, so
     # getting to the drive from here needs an actual restart, which this
     # does itself using the same sequence POWER_ACTION=reboot uses above.
-    # Deliberately NOT exec'd, same reasoning as boot-live-iso.sh: a
+    # Deliberately NOT exec'd, unlike the kernel handoff below: a
     # failure here is ordinary (drive unplugged, no efivarfs, efibootmgr
     # refuses) and must return to the menu, not take PID 1 down with it.
     if [ -n "$BOOT_EXTERNAL_PART" ]; then

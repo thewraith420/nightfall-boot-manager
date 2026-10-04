@@ -318,8 +318,8 @@ int main(void) {
         ck(bd[0].label[0] == '\0', "an empty label field stays empty - the UI falls back to the device name");
         ck(!strcmp(bd[1].label, "RESCUE"), "a real label is kept when the drive has one");
 
-        /* Confirming must end the running process the same way a live-USB
-         * or kernel choice does - via the flags the main loop's break
+        /* Confirming must end the running process the same way a kernel
+         * choice does - via the flags the main loop's break
          * condition reads - since this is a genuine boot (of a sort),
          * not a child job like backup/restore. */
         g_bootable = bd; g_bootable_n = bn;
@@ -332,53 +332,6 @@ int main(void) {
 
         remove("/tmp/mock-bootable");
         g_bootable = NULL; g_bootable_n = 0;
-    }
-
-    /* --- boot a live USB: discovery, scanning, and the confirm --- */
-    {
-        FILE *lf = fopen("/tmp/mock-isos", "w");
-        fprintf(lf, "ubuntu-24.04.iso\t5.0G\tubuntu-24.04.iso\n");
-        fprintf(lf, "isos/debian-live.iso\t980M\tdebian-live.iso\n");
-        fprintf(lf, "bare-path-only.iso\n");   /* short row: name defaults to path */
-        fclose(lf);
-        static struct live_iso li[8];
-        int ln = load_live_isos("/tmp/mock-isos", li, 8);
-        ck(ln == 3, "parses one row per candidate ISO");
-        ck(!strcmp(li[0].path, "ubuntu-24.04.iso") && !strcmp(li[0].size, "5.0G"),
-           "path and size round-trip");
-        ck(!strcmp(li[1].path, "isos/debian-live.iso"),
-           "a subdirectory in the path survives - it is what the cmdline needs later");
-        ck(!strcmp(li[2].name, "bare-path-only.iso"),
-           "a row with no separate name field falls back to the path");
-
-        /* scan_live_isos() is the on-demand equivalent of rescan_drives():
-         * one drive, on tap, not folded into the periodic scan. */
-        setenv("NIGHTFALL_LIVE_ISOS_SH", "/nonexistent/discover-live-isos.sh", 1);
-        ck(scan_live_isos("/dev/sdb1") == -1, "fails cleanly when the discovery script is missing");
-
-        FILE *df = fopen("/tmp/mock-discover-isos.sh", "w");
-        fprintf(df, "#!/bin/sh\necho \"MARKER_DEV=$1\" >&2\n"
-                    "printf 'live.iso\\t3.2G\\tlive.iso\\n'\nexit 0\n");
-        fclose(df); chmod("/tmp/mock-discover-isos.sh", 0755);
-        setenv("NIGHTFALL_LIVE_ISOS_SH", "/tmp/mock-discover-isos.sh", 1);
-        setenv("NIGHTFALL_LIVE_ISOS_TSV", "/tmp/mock-live-isos.tsv", 1);
-
-        g_live_iso_n = 0; g_live_isos = NULL;
-        ck(scan_live_isos("/dev/sdb1") == 0, "scans the named drive");
-        ck(g_live_iso_n == 1 && !strcmp(g_live_isos[0].path, "live.iso"),
-           "and loads what it found");
-
-        /* Confirming an ISO must end the running process the same way a
-         * kernel choice or Restart does - via the flags the main loop's
-         * break condition reads - not spawn a child like backup/restore. */
-        g_live_boot = 0; g_live_iso_path[0] = '\0';
-        confirm_live_boot(0);
-        ck(g_live_boot == 1, "confirming sets the flag that ends the main loop");
-        ck(!strcmp(g_live_iso_path, "live.iso"), "and records which ISO, for the LIVE_BOOT_ISO contract");
-        g_live_boot = 0; g_live_iso_path[0] = '\0';
-
-        remove("/tmp/mock-isos"); remove("/tmp/mock-discover-isos.sh"); remove("/tmp/mock-live-isos.tsv");
-        g_live_isos = NULL; g_live_iso_n = 0;
     }
 
     /* --- saved per-kernel command lines --- */
@@ -654,23 +607,6 @@ int main(void) {
             }
             ck(has_reason, "the notice carries init's reason verbatim");
             ck(has_still, "and says booting a drive, backups and repairs still work");
-        }
-
-        /* A live-ISO boot is also a kexec, so it is refused the same way. */
-        {
-            static struct live_iso lis[1] = {{ "live.iso", "3.2G", "live.iso" }};
-            g_live_isos = lis; g_live_iso_n = 1;
-            lv_obj_clean(lv_layer_top());
-            ck(live_iso_tapped(0) == 0, "a blocked live-ISO tap is refused too");
-            lv_obj_update_layout(lv_layer_top());
-            ck(TOP_FOOTER_BTNS() == 1, "with the same single-OK explanation");
-            lv_obj_clean(lv_layer_top());
-            unsetenv("NIGHTFALL_KEXEC_BLOCKED");
-            ck(live_iso_tapped(0) == 1, "and opens the normal confirm when kexec works");
-            lv_obj_update_layout(lv_layer_top());
-            ck(TOP_FOOTER_BTNS() == 2, "which is the two-button Cancel/Boot dialog");
-            setenv("NIGHTFALL_KEXEC_BLOCKED", "kernel lockdown is 'integrity', which refuses kexec.", 1);
-            g_live_isos = NULL; g_live_iso_n = 0;
         }
 
         /* The Boot screen warns at the top. */

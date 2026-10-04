@@ -8,7 +8,6 @@ on selection.
 `test-init.sh`, `test-backup.sh`, `test-restore.sh`, `test-remove-backup.sh`,
 `test-rename-backup.sh`, `test-remove-kernel.sh`, `test-fsck-root.sh`,
 `test-repair.sh`, `test-cmdline.sh`, `test-discover-kernels.sh`,
-`test-discover-live-isos.sh`, `test-boot-live-iso.sh`,
 `test-discover-bootable-drives.sh`, `test-boot-external-drive.sh`,
 `test-find-real-root.sh`, `test-discover-bls.sh`):
 
@@ -35,14 +34,11 @@ on selection.
   already present, confirmed by re-extracting IKCONFIG. Tested against a
   mocked, stateful `efibootmgr`; nobody has armed a real `BootNext` from it
   yet.
-- **Live USB** (a secondary, narrower option, kept alongside the above
-  rather than replaced by it): `discover-live-isos.sh` (lists `.iso` files,
-  cheaply - no loop-mounting just to draw a list), `boot-live-iso.sh`
-  (loop-mounts one as `iso9660`, finds a `casper` or `live-boot` layout
-  inside it, `kexec`s in). **Needs `CONFIG_ISO9660_FS`/`JOLIET`/`UDF_FS` in
-  the picker kernel** - built and IKCONFIG-verified, not yet booted on
-  hardware - see the driver table below. Everything here is tested against
-  mocked `mount`/`losetup`/`kexec`; nothing has touched a real ISO yet.
+- **Booting a single ISO file was removed (2026-10-03).** Live systems
+  cannot read the exFAT a Ventoy stick uses while they start, so it could
+  never work from one, and a Ventoy-style workaround passed in QEMU but
+  failed on real hardware. Boot an external drive (above) into Ventoy
+  instead - its own menu boots every ISO on the stick.
 
 - `init` - PID 1: mounts `/proc` `/sys` `/dev`, finds its own real root with
   `find-real-root.sh` (self-discovery by stamped build id, confirmed on
@@ -324,7 +320,6 @@ not a module (`=m`):
 | touch | `I2C_HID`, `I2C_HID_ACPI`, `HID_MULTITOUCH`, `INPUT_EVDEV` |
 | backing up to a USB drive | `SCSI`, `BLK_DEV_SD`, `USB_STORAGE`, `USB_UAS`, `VFAT_FS`, `EXFAT_FS`, `NTFS3_FS`, `NLS_UTF8` |
 | auto-rotate | `MFD_CROS_EC_DEV`, `CROS_EC_SENSORHUB`, `IIO`, `IIO_BUFFER`, `IIO_TRIGGERED_BUFFER`, `IIO_CROS_EC_SENSORS_CORE`, `IIO_CROS_EC_SENSORS` |
-| booting a live USB | `BLK_DEV_LOOP` (already `=y` for other reasons), `ISO9660_FS`, `JOLIET`, `UDF_FS` |
 | booting an external drive | `EFI`, `EFIVAR_FS`, `EFI_PARTITION` - already `=y`, confirmed by IKCONFIG |
 | the entire point | `KEXEC` |
 
