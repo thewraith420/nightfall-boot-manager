@@ -192,6 +192,11 @@ override_hint="  If you are sure, say explicitly what to use - note sudo's place
   7.2.7 with current firmware neither is needed any more (see the comment
   above this check). Copy whatever your OWN working boot's cmdline has."
 
+# MIRRORED in nightfall-toolkit's lib/nightfall-cmdline-check.sh, which runs
+# the same check before this script and must stay identical: if this rule
+# (these two functions, or when they are consulted) changes, tell the
+# nightfall-toolkit session/repo so its copy changes too.
+#
 # The saved per-kernel command line for the RUNNING kernel, if one exists.
 # Keyed the way apply-cmdline.sh and the fixer key it: by the
 # /boot/vmlinuz-<release> suffix, last line wins, empty values ignored.
