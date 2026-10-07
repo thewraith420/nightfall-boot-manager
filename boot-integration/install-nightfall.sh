@@ -163,8 +163,9 @@ esac
 # options at all. Reinstalling from there used to write an empty set into
 # Nightfall's entry, and on this panel an empty set is a black screen -
 # with only a note on stderr to say so. Recovery mode is precisely when
-# someone reaches for a reinstall. (Found by the chromebook-linux-fixer
-# session, which refuses the same case before calling this script.)
+# someone reaches for a reinstall. (Found by the nightfall-toolkit session -
+# then called chromebook-linux-fixer - which refuses the same case before
+# calling this script.)
 #
 # So, unless NIGHTFALL_CMDLINE says explicitly what to use, refuse:
 #   - a boot whose cmdline contains nomodeset or recovery

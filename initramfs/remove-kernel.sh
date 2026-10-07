@@ -59,7 +59,7 @@ here=${0%/*}; [ "$here" != "$0" ] || here=.
 pkg=$("$here/package-owner.sh" "$root" "/boot/vmlinuz-$release" 2>/dev/null) || pkg=""
 if [ -n "$pkg" ]; then
     die "this kernel belongs to package '$pkg' - remove it with your \
-package manager instead (or chromebook-fixer's 'kernels --remove', \
+package manager instead (or 'nightfall-toolkit kernels --remove', \
 which purges it properly). Deleting the files here would leave $pkg \
 \"installed\" with nothing left to back that up."
 fi

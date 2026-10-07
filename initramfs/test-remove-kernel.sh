@@ -137,7 +137,7 @@ printf '/boot/vmlinuz-distro-kernel\n/boot/initrd.img-distro-kernel\n' \
 rc=$(run distro-kernel)
 [ "$rc" != 0 ] && ok "refuses a kernel dpkg still owns" || bad "removed a dpkg-owned kernel"
 out | grep -q "linux-image-distro-kernel" && ok "and names the owning package" || bad "no package name in the message: $(out|tail -2)"
-out | grep -qi "fixer\|package manager" && ok "and points at the real way to remove it" || bad "no pointer to the real tool: $(out|tail -2)"
+out | grep -q "nightfall-toolkit kernels --remove" && out | grep -q "package manager" && ok "and points at the real ways to remove it (package manager, or the toolkit by its current name)" || bad "no pointer to the real tool: $(out|tail -2)"
 [ -f "$SB/root/boot/vmlinuz-distro-kernel" ] && ok "deleted nothing" || bad "deleted a package-owned kernel"
 
 setup "keep-me pkg-kernel"
