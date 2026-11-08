@@ -1,0 +1,229 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# gbos-init: the bare-metal GBOS first stage (plan item N2).
+#
+# HOW IT GETS RUN. The GBOS boot entry boots the distro's own kernel and
+# initramfs with "rw init=/gbos/gbos-init". The distro initramfs does the
+# hard, hardware-specific half: storage drivers (the Slate's eMMC driver is a
+# module), fsck, finding and mounting the root filesystem read-write, moving
+# /dev, /proc, /sys and /run into it. Then it execs this script as PID 1 on
+# the real root. So everything here runs as ordinary distro userland, which is
+# built for this CPU - never GBOS userland, which needs the in-kernel
+# instruction emulator.
+#
+# WHAT IT DOES. It stands in for Android's stock first stage ("option B" in
+# the GBOS bare-metal plan), then execs Android's second stage:
+#   1. loads drivers from this kernel's own /lib/modules (Android turns
+#      kernel module autoloading off, so anything not loaded now stays
+#      unloaded);
+#   2. mounts the GBOS images from $GBOS_DIR as one system-as-root tree;
+#   3. makes /lib/firmware visible inside it (the kernel resolves firmware
+#      paths in PID 1's root, which is about to become Android's);
+#   4. switches root and execs /system/bin/init selinux_setup, with nothing
+#      but fds 0-2 open (zygote refuses to fork system_server otherwise).
+#
+# FAILURE. Anything that goes wrong before the exec is logged to the kernel
+# log and to $GBOS_DIR/boot.log, then the machine reboots, so GRUB and
+# Nightfall are one reboot away. Kernel panics reboot via panic= on the
+# command line. Nothing here writes outside $GBOS_DIR.
+#
+# Kernel command line options read here (all optional):
+#   gbos.dir=/gbos             where the images are, on the root filesystem
+#   gbos.modules=a,b           extra modules to load by name, before the images
+#   gbos.kmsglog=0             do not keep a copy of the kernel log in
+#                              $GBOS_DIR/kmsg.log (on by default: on the Slate
+#                              it is the only log that survives a reboot)
+#   gbos.fail=reboot|poweroff|halt   what to do on failure (tests use poweroff)
+#   gbos.test=1                test runs only: skip the readiness checks that
+#                              need a real distro root
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 022
+
+GBOS_DIR=/gbos
+GBOS_MODULES=""
+GBOS_KMSGLOG=1
+GBOS_FAIL=reboot
+for tok in $(cat /proc/cmdline 2>/dev/null); do
+    case "$tok" in
+        gbos.dir=/*)     GBOS_DIR=${tok#gbos.dir=} ;;
+        gbos.modules=*)  GBOS_MODULES=${tok#gbos.modules=} ;;
+        gbos.kmsglog=0)  GBOS_KMSGLOG=0 ;;
+        gbos.fail=*)     GBOS_FAIL=${tok#gbos.fail=} ;;
+    esac
+done
+GBOS_DIR=${GBOS_DIR%/}
+R=$GBOS_DIR/root            # the new root is assembled here
+LOG=$GBOS_DIR/boot.log
+
+# One log per boot: keep the previous one, so a failed boot followed by a
+# second attempt does not erase the evidence.
+if [ -d "$GBOS_DIR" ]; then
+    [ -f "$LOG" ] && mv -f "$LOG" "$LOG.1" 2>/dev/null
+    : > "$LOG" 2>/dev/null || LOG=/dev/null
+else
+    LOG=/dev/null
+fi
+
+KMSG=/dev/kmsg
+log() {
+    echo "gbos-init: $*" > "$KMSG" 2>/dev/null
+    echo "$(cut -d' ' -f1 /proc/uptime 2>/dev/null) $*" >> "$LOG" 2>/dev/null
+}
+
+fail() {
+    log "FAILED: $*"
+    log "rebooting in 5 seconds (gbos.fail=$GBOS_FAIL)"
+    sync; sleep 5; sync
+    case "$GBOS_FAIL" in
+        poweroff) echo o > /proc/sysrq-trigger ;;
+        halt)     while :; do sleep 3600; done ;;
+        *)        echo b > /proc/sysrq-trigger ;;
+    esac
+    # sysrq acts asynchronously: wait for it rather than exiting PID 1, which
+    # would panic first.
+    sleep 30
+    # If sysrq is somehow unavailable, exiting PID 1 panics, and panic=
+    # (set by the boot entry) reboots.
+    exit 1
+}
+
+log "starting as pid $$ on $(uname -r), images in $GBOS_DIR"
+[ "$$" = 1 ] || log "warning: not PID 1 - the root switch will not behave like a real boot"
+
+# --- 0. the root the distro initramfs handed over -------------------------
+grep -qs ' / [^ ]* rw[ ,]' /proc/mounts || mount -o remount,rw / 2>/dev/null \
+    || fail "the root filesystem is read-only and cannot be remounted read-write (does the entry carry 'rw'?)"
+for f in system product system_ext vendor; do
+    [ -f "$GBOS_DIR/$f.img" ] || fail "$GBOS_DIR/$f.img is missing - is GBOS installed?"
+done
+# A splash daemon holding the display would keep SurfaceFlinger from ever
+# getting DRM master. The entry passes plymouth.enable=0; this is the belt.
+command -v plymouth >/dev/null 2>&1 && plymouth quit >/dev/null 2>&1
+
+# Persistent kernel log: a child that keeps copying /dev/kmsg to the root
+# filesystem. It survives the exec of Android's init (it is a separate
+# process, so init inherits none of its descriptors) and keeps writing to
+# the distro filesystem through its own root, which the switch does not
+# change. On the Slate, pstore is EFI-only and catches panics, not reboots,
+# so without this a failed Android boot leaves nothing to read.
+if [ "$GBOS_KMSGLOG" = 1 ] && [ "$LOG" != /dev/null ]; then
+    [ -f "$GBOS_DIR/kmsg.log" ] && mv -f "$GBOS_DIR/kmsg.log" "$GBOS_DIR/kmsg.log.1"
+    ( exec </dev/null >/dev/null 2>&1
+      cat /dev/kmsg >> "$GBOS_DIR/kmsg.log" &
+      while sleep 2; do sync -f "$GBOS_DIR/kmsg.log" 2>/dev/null || sync; done ) &
+    log "copying the kernel log to $GBOS_DIR/kmsg.log"
+fi
+
+# --- 1. drivers ------------------------------------------------------------
+# Android empties /proc/sys/kernel/modprobe in early-init, so this is the
+# last moment anything can be loaded. modprobe is the distro's own, so its
+# blacklists, options and softdeps apply exactly as they do under the distro;
+# module_blacklist= on the command line is enforced by the kernel itself.
+modprobe_q() { modprobe -qab "$@" 2>/dev/null; }
+
+# Preloaded whatever the hardware: hot-pluggable classes. A device that
+# appears after Android starts only binds if its driver is already resident,
+# because Android's ueventd never looks in /lib/modules. Touch (i2c-hid) is
+# the Slate's main input; a USB keyboard or mouse may be plugged in later.
+PRELOAD="hid hid_generic usbhid hid_multitouch i2c_hid i2c_hid_acpi cros_ec_keyb btusb btintel"
+# shellcheck disable=SC2086
+modprobe_q $PRELOAD $(echo "$GBOS_MODULES" | tr ',' ' ')
+
+# Coldplug: load a driver for every device present, by modalias, as udev
+# would. Loading a bus driver makes new devices appear (the EC's children, the
+# devices behind an i2c controller), so repeat until a pass loads nothing new.
+pass=0
+while [ $pass -lt 6 ]; do
+    pass=$((pass + 1))
+    before=$(wc -l < /proc/modules)
+    find /sys/devices -name modalias -type f -exec cat {} + 2>/dev/null | sort -u \
+        | xargs -r modprobe -qab 2>/dev/null
+    sleep 1
+    after=$(wc -l < /proc/modules)
+    log "coldplug pass $pass: $before -> $after modules"
+    [ "$after" -gt "$before" ] || break
+done
+for m in i915 erofs; do
+    [ -d "/sys/module/$m" ] || log "warning: $m is not loaded (built in and named differently, or missing)"
+done
+
+# --- 2. the images, as one system-as-root tree -----------------------------
+mnt_img() {   # mnt_img IMAGE TARGET FSTYPES: read-only, through a loop device
+    for t in $(echo "$3" | tr ',' ' '); do
+        if mount -t "$t" -o ro,loop,noatime "$1" "$2" 2>/dev/null; then
+            log "mounted $1 at ${2#"$R"} ($t, read-only)"
+            return 0
+        fi
+    done
+    fail "cannot mount $1 at $2 as $3"
+}
+
+mkdir -p "$R" || fail "cannot create $R"
+mountpoint -q "$R" && fail "$R is already a mount point - left over from an earlier run?"
+mnt_img "$GBOS_DIR/system.img"     "$R"            erofs,ext4
+[ -x "$R/system/bin/init" ] || fail "$GBOS_DIR/system.img has no /system/bin/init - not a system-as-root image?"
+mnt_img "$GBOS_DIR/product.img"    "$R/product"    erofs,ext4
+mnt_img "$GBOS_DIR/system_ext.img" "$R/system_ext" erofs,ext4
+mnt_img "$GBOS_DIR/vendor.img"     "$R/vendor"     ext4,erofs
+
+# What the stock first stage would have mounted (read from its binary).
+tmpfs_at() { mount -t tmpfs -o "$2" tmpfs "$R$1" || fail "tmpfs on $1"; }
+tmpfs_at /mnt                    nodev,noexec,nosuid,mode=0755,uid=0,gid=1000
+mkdir -p "$R/mnt/product" "$R/mnt/vendor"
+tmpfs_at /debug_ramdisk          nodev,noexec,nosuid,mode=0755
+tmpfs_at /second_stage_resources nodev,noexec,nosuid,mode=0755
+tmpfs_at /metadata               nodev,nosuid,mode=0771,uid=0,gid=1000
+
+# /data is a plain directory on the root filesystem, bound in. Not an image
+# file: one sync before a hard power-off did not carry data through both
+# layers of an image, which a tablet that gets hard-reset cannot afford.
+if [ ! -d "$GBOS_DIR/data" ]; then
+    mkdir -m 0771 "$GBOS_DIR/data" || fail "cannot create $GBOS_DIR/data"
+    log "created $GBOS_DIR/data (first boot: expect several minutes of dexopt)"
+fi
+mount --bind "$GBOS_DIR/data" "$R/data" || fail "bind $GBOS_DIR/data at /data"
+
+# --- 3. firmware -----------------------------------------------------------
+# After the switch, the kernel's firmware loader resolves paths in Android's
+# root (PID 1 shares init_task's fs_struct). Android's own init leaves
+# /debug_ramdisk alone; it creates and restorecons /mnt, so not there.
+FW=/debug_ramdisk/gbos-fw
+if [ -d /lib/firmware ]; then
+    mkdir -p "$R$FW"
+    mount --bind /lib/firmware "$R$FW" && mount -o remount,bind,ro "$R$FW" \
+        || fail "bind /lib/firmware at $FW"
+    if [ -w /sys/module/firmware_class/parameters/path ]; then
+        printf '%s' "$FW" > /sys/module/firmware_class/parameters/path
+        log "firmware: /lib/firmware visible at $FW, firmware_class.path set"
+    else
+        log "warning: cannot set firmware_class.path - firmware requested after the switch will not be found"
+    fi
+else
+    log "warning: no /lib/firmware on this root"
+fi
+
+# --- 4. pseudo filesystems, then the switch --------------------------------
+mkdir -p /dev/pts /dev/dm-user /dev/socket
+mountpoint -q /dev/pts || mount -t devpts devpts /dev/pts
+mountpoint -q /sys/fs/selinux || mount -t selinuxfs selinuxfs /sys/fs/selinux \
+    || log "warning: selinuxfs did not mount - is selinux in lsm=? Android's init cannot load its policy without it"
+
+mount --move /dev "$R/dev" || fail "move /dev"
+KMSG=$R/dev/kmsg
+mount --move /sys "$R/sys" || fail "move /sys"
+# A fresh proc, mounted the way Android's first stage mounts it (readproc
+# group 3009), rather than the distro's moved in.
+mount -t proc -o nodev,noexec,nosuid,hidepid=2,gid=3009 proc "$R/proc" || fail "proc"
+
+log "switching root; exec /system/bin/init selinux_setup"
+sync
+cd "$R" || fail "cd $R"
+mount --move . / || fail "move the new root over /"
+# chroot is looked up in the old root: a process's root is a dentry, and the
+# new mount now sits on top of it, so absolute paths still resolve below.
+# Only fds 0-2 survive: dash keeps its script on a close-on-exec descriptor,
+# and nothing else here is left open (the test checks this).
+exec chroot . /system/bin/init selinux_setup
+fail "exec /system/bin/init"

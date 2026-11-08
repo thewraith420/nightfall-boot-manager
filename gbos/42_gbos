@@ -1,0 +1,67 @@
+#! /bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# /etc/grub.d/42_gbos: the GBOS boot entry (plan item N1), installed by
+# gbos/install-gbos-entry.sh. update-grub runs it; Nightfall then lists the
+# entry like any other grub.cfg kernel and kexecs it unchanged.
+#
+# The entry boots the distro's own kernel and initramfs for the release named
+# in /etc/gbos/kernel-release, through symlinks in /boot/gbos/ (so Nightfall's
+# per-kernel command-line overrides and default marker, keyed by the linux
+# path, never confuse it with the distro's own entry for the same kernel),
+# with init=/gbos/gbos-init. Prints nothing, so no entry exists, when GBOS or
+# that kernel is not installed: a dangling entry would fail at boot instead.
+set -e
+
+prefix="/usr"
+exec_prefix="/usr"
+datarootdir="/usr/share"
+. "${GBOS_MKCONFIG_LIB:-$datarootdir/grub/grub-mkconfig_lib}"
+
+CONF=${GBOS_CONF_DIR:-/etc/gbos}
+BOOT=${GBOS_BOOT_DIR:-/boot}
+GDIR=$(cat "$CONF/dir" 2>/dev/null || echo /gbos)
+release=$(cat "$CONF/kernel-release" 2>/dev/null || :)
+ROOTPFX=${GBOS_ROOT_PREFIX:-}     # tests only: where "/" is
+
+[ -n "$release" ] || exit 0
+[ -e "$BOOT/vmlinuz-$release" ] && [ -e "$BOOT/initrd.img-$release" ] || {
+    echo "42_gbos: kernel $release or its initrd is missing - no GBOS entry" >&2; exit 0; }
+[ -x "$ROOTPFX$GDIR/gbos-init" ] && [ -f "$ROOTPFX$GDIR/system.img" ] || {
+    echo "42_gbos: $GDIR/gbos-init or $GDIR/system.img is missing - no GBOS entry" >&2; exit 0; }
+[ -e "$BOOT/gbos/vmlinuz" ] && [ -e "$BOOT/gbos/initrd.img" ] || {
+    echo "42_gbos: $BOOT/gbos/{vmlinuz,initrd.img} are missing - re-run install-gbos-entry.sh" >&2; exit 0; }
+
+# The distro's own options, minus what must not reach Android: the splash
+# (its daemon would hold DRM master) and anything choosing security modules
+# (GBOS needs SELinux in lsm=, set below). i915.* and module_blacklist= stay:
+# a normal boot that lights the panel is proof of that set.
+distro_opts=""
+for o in ${GRUB_CMDLINE_LINUX:-} ${GRUB_CMDLINE_LINUX_DEFAULT:-}; do
+    case "$o" in
+        quiet|splash|nosplash|vt.handoff=*|apparmor=*|security=*|lsm=*|selinux=*|enforcing=*|init=*|ro|rw|root=*) ;;
+        *) distro_opts="$distro_opts $o" ;;
+    esac
+done
+extra=$(grep -v '^[[:space:]]*#' "$CONF/cmdline" 2>/dev/null | tr '\n' ' ' || :)
+
+uuid=${GBOS_ROOT_UUID:-$(${grub_probe} --target=fs_uuid "$ROOTPFX$GDIR")}
+gbos_opts="root=UUID=$uuid rw init=$GDIR/gbos-init panic=10 plymouth.enable=0 printk.devkmsg=on"
+gbos_opts="$gbos_opts lsm=landlock,lockdown,yama,integrity,selinux enforcing=0"
+gbos_opts="$gbos_opts androidboot.hardware=android-desktop androidboot.hardware.platform=android-desktop"
+[ "$GDIR" = /gbos ] || gbos_opts="$gbos_opts gbos.dir=$GDIR"
+
+linux_rel=$(make_system_path_relative_to_its_root "$BOOT/gbos/vmlinuz")
+initrd_rel=$(make_system_path_relative_to_its_root "$BOOT/gbos/initrd.img")
+boot_dev=$(${grub_probe} --target=device "$BOOT/gbos/vmlinuz")
+
+echo "Found GBOS: $release, images in $GDIR" >&2
+cat <<EOF
+menuentry 'GBOS (Android 17)' --class android --class os --id gbos {
+	load_video
+	insmod gzio
+$(prepare_grub_to_access_device "$boot_dev" | sed 's/^/	/')
+	echo 'Loading GBOS ($release) ...'
+	linux	$linux_rel $gbos_opts$distro_opts $extra
+	initrd	$initrd_rel
+}
+EOF
