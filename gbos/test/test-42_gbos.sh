@@ -22,6 +22,7 @@ REL=7.2.15-BobZKernel-pixel-slate-dirty
 B=$T/boot; R=$T/rootfs; C=$T/etc-gbos; G=$T/grub.d
 mkdir -p "$B" "$R/gbos" "$G"
 touch "$B/vmlinuz-$REL" "$B/initrd.img-$REL" "$R/gbos/system.img"
+mkdir -p "$R/lib/modules/$REL"; touch "$R/lib/modules/$REL/modules.dep"
 printf 'CONFIG_GBOS_VEXEMU=y\nCONFIG_EROFS_FS=y\nCONFIG_ANDROID_BINDER_IPC=y\nCONFIG_SECURITY_SELINUX=y\nCONFIG_IP_NF_IPTABLES_LEGACY=y\n' > "$B/config-$REL"
 export GBOS_MKCONFIG_LIB=$T/lib GBOS_BOOT_DIR=$B GBOS_CONF_DIR=$C GBOS_GRUBD_DIR=$G GBOS_ROOT_PREFIX=$R GBOS_UPDATE_GRUB=true
 export GRUB_CMDLINE_LINUX_DEFAULT="quiet splash module_blacklist=hid_google_hammer i915.enable_dpcd_backlight=2 i915.enable_psr=0 apparmor=1"
@@ -59,6 +60,10 @@ touch "$B/initrd.img-$REL"
 rm "$R/gbos/system.img"
 out=$("$G/42_gbos" 2>/dev/null); [ -z "$out" ] && ok "no entry without the images" || bad "no entry without the images"
 touch "$R/gbos/system.img"
+
+mv "$R/lib/modules/$REL/modules.dep" "$R/lib/modules/$REL/modules.dep.off"
+"$GB/install-gbos-entry.sh" --release "$REL" >/dev/null 2>&1 && bad "refuses a kernel without its modules" || ok "refuses a kernel without its modules"
+mv "$R/lib/modules/$REL/modules.dep.off" "$R/lib/modules/$REL/modules.dep"
 
 sed -i '/GBOS_VEXEMU/d' "$B/config-$REL"
 "$GB/install-gbos-entry.sh" --release "$REL" >/dev/null 2>&1 && bad "refuses a kernel without GBOS options" || ok "refuses a kernel without GBOS options"

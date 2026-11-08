@@ -122,6 +122,11 @@ fi
 # blacklists, options and softdeps apply exactly as they do under the distro;
 # module_blacklist= on the command line is enforced by the kernel itself.
 modprobe_q() { modprobe -qab "$@" 2>/dev/null; }
+# Without this kernel's modules nothing below loads (on the Slate: i915, so
+# no display) and Android crash-loops forever instead of failing. Seen in
+# QEMU with a kernel whose release did not match the root's modules.
+[ -f "/lib/modules/$(uname -r)/modules.dep" ] \
+    || fail "no modules for $(uname -r) in /lib/modules - is the entry's kernel installed with its modules? (re-run install-gbos-entry.sh)"
 
 # Preloaded whatever the hardware: hot-pluggable classes. A device that
 # appears after Android starts only binds if its driver is already resident,

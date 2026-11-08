@@ -23,10 +23,30 @@ HERE=$(cd "$(dirname "$0")" && pwd); GB=$(cd "$HERE/.." && pwd)
 PATH=$PATH:/usr/sbin:/sbin
 for t in gcc mkfs.erofs mke2fs debugfs depmod cpio qemu-system-x86_64; do
     command -v $t >/dev/null || { echo "need $t"; exit 2; }; done
-REL=$(cat "$TREE/include/config/kernel.release")
+# The release the bzImage itself reports (its setup header's kernel_version
+# string), not the tree's kernel.release: the tree's config can change
+# (LOCALVERSION) after the bzImage was built, and modules filed under another
+# name are never found.
+vo=$(od -An -tu2 -j526 -N2 "$K" | tr -d ' ')
+REL=$(dd if="$K" bs=1 skip=$((vo + 512)) count=200 2>/dev/null | tr '\0' '\n' | head -1 | cut -d' ' -f1)
+[ -n "$REL" ] || { echo "cannot read the release from $K"; exit 2; }
 W=$(mktemp -d "${TMPDIR:-/tmp}/gbos-init-test.XXXXXX"); trap 'rm -rf "$W"' EXIT
 cp "$K" "$W/bzImage"                       # snapshot: the tree may be rebuilt meanwhile
+# Real-image mode only: GBOS_TEST_DISK=<file> keeps the test root there. If it
+# already exists it is booted again as it is, /data and all, which is how a
+# second boot is tested (a first boot under TCG takes more than 30 minutes of
+# dexopt and does not finish). The reused disk keeps the gbos-init it was
+# built with.
+DISK=$W/root.img; REUSE=""
+if [ -n "$IMAGES" ] && [ -n "${GBOS_TEST_DISK:-}" ]; then
+    DISK=$GBOS_TEST_DISK; [ -f "$DISK" ] && REUSE=1
+    # the disk holds modules for one release only: another kernel boots with none
+    if [ -n "$REUSE" ] && [ "$(cat "$DISK.release" 2>/dev/null)" != "$REL" ]; then
+        echo "$DISK was built for '$(cat "$DISK.release" 2>/dev/null)', not $REL - remove it to build a new one"; exit 2
+    fi
+fi
 
+if [ -z "$REUSE" ]; then
 # --- the distro root: this machine's own userland, as the distro's would be
 RT=$W/root
 mkdir -p $RT/usr/bin $RT/usr/sbin $RT/usr/lib $RT/usr/lib64 $RT/etc/modprobe.d $RT/dev $RT/proc $RT/sys $RT/run $RT/tmp
@@ -81,7 +101,10 @@ mkdir -p $RT/gbos/bind/vendor $RT/gbos/bind/product; echo "replaced vendor" > $R
 echo "no such file" > $RT/gbos/bind/product/NOT-THERE
 fi
 
-if [ -n "$IMAGES" ]; then mke2fs -q -t ext4 -L testroot -d $RT $W/root.img 24G; else mke2fs -q -t ext4 -L testroot -d $RT $W/root.img 2G; fi
+if [ -n "$IMAGES" ]; then mke2fs -q -t ext4 -L testroot -d $RT "$DISK" 24G; else mke2fs -q -t ext4 -L testroot -d $RT "$DISK" 2G; fi
+rm -rf "$RT"                               # the images are in $DISK now
+[ -z "$IMAGES" ] || printf '%s\n' "$REL" > "$DISK.release"
+fi
 
 # --- the stand-in distro initramfs
 gcc -O2 -static -o $W/ird-init "$HERE/distro-initramfs.c"
@@ -89,21 +112,37 @@ mkdir -p $W/ird; cp $W/ird-init $W/ird/init
 ( cd $W/ird && find . | cpio -o -H newc --quiet -R 0:0 ) | gzip -9 > $W/ird.gz
 
 if [ -n "$IMAGES" ]; then
-    LOG=${GBOS_TEST_LOG:-$PWD/gbos-init-real.log}
+    LOG=${GBOS_TEST_LOG:-$PWD/gbos-init-real.log}; OUT=$(dirname "$LOG")
     CMD="console=ttyS0 panic=-1 loglevel=7 printk.devkmsg=on rw init=/gbos/gbos-init gbos.fail=poweroff lsm=landlock,lockdown,yama,integrity,selinux enforcing=0 androidboot.hardware=android-desktop androidboot.hardware.platform=android-desktop"
-    echo "real images: guest ${GBOS_TEST_MEM:-3072} MB, up to ${GBOS_TEST_TIMEOUT:-2400}s, console in $LOG"
-    timeout "${GBOS_TEST_TIMEOUT:-2400}" qemu-system-x86_64 -accel tcg -cpu Skylake-Client -smp 2 -m "${GBOS_TEST_MEM:-3072}" \
+    TO=${GBOS_TEST_TIMEOUT:-2400}; SHOT=${GBOS_TEST_SHOT:-300}
+    echo "real images: guest ${GBOS_TEST_MEM:-3072} MB, up to ${TO}s, $([ -n "$REUSE" ] && echo "second boot of $DISK" || echo "first boot"), console in $LOG"
+    [ "$DISK" = "$W/root.img" ] || echo "disk kept: $DISK (boot it again with the same GBOS_TEST_DISK)"
+    # The serial console carries the kernel log only, not logcat, so the
+    # screen is the one view of what Android shows: a screendump every $SHOT s.
+    rm -f "$OUT"/gbos-init-real-shot-*.ppm
+    ( t=0; while sleep "$SHOT"; do t=$((t + SHOT)); [ -S $W/mon ] || continue
+        echo "screendump $OUT/gbos-init-real-shot-$(printf %05d $t).ppm" | socat - UNIX-CONNECT:$W/mon >/dev/null 2>&1 || :
+      done ) & SHOTPID=$!
+    timeout "$TO" qemu-system-x86_64 -accel tcg -cpu Skylake-Client -smp 2 -m "${GBOS_TEST_MEM:-3072}" \
         -display egl-headless -device virtio-vga-gl -serial "file:$LOG" -no-reboot \
-        -kernel $W/bzImage -initrd $W/ird.gz -drive file=$W/root.img,if=virtio,format=raw \
+        -monitor unix:$W/mon,server,nowait \
+        -kernel $W/bzImage -initrd $W/ird.gz -drive file="$DISK",if=virtio,format=raw \
         -device qemu-xhci -device usb-kbd -append "$CMD" || :
-    e2fsck -fy $W/root.img >/dev/null 2>&1 || :
-    debugfs -R "dump /gbos/kmsg.log $PWD/gbos-init-real.kmsg.log" $W/root.img >/dev/null 2>&1
-    debugfs -R "dump /gbos/boot.log $PWD/gbos-init-real.boot.log" $W/root.img >/dev/null 2>&1
-    echo "kernel log copy: $PWD/gbos-init-real.kmsg.log, shim log: $PWD/gbos-init-real.boot.log"
-    K2="$PWD/gbos-init-real.kmsg.log"
-    for p in "gbos-init: switching root" "init: init second stage started" "starting service 'zygote" \
-             "starting service 'surfaceflinger" "System now ready" "setupwizard" "FAILED"; do
-        printf '%-40s %s\n' "$p" "$(cat "$LOG" "$K2" 2>/dev/null | tr -d '\r' | grep -c -- "$p")"
+    kill $SHOTPID 2>/dev/null || :
+    e2fsck -fy "$DISK" >/dev/null 2>&1 || :
+    K2=$OUT/gbos-init-real.kmsg.log
+    debugfs -R "dump /gbos/kmsg.log $K2" "$DISK" >/dev/null 2>&1
+    debugfs -R "dump /gbos/boot.log $OUT/gbos-init-real.boot.log" "$DISK" >/dev/null 2>&1
+    echo "kernel log copy: $K2, shim log: $OUT/gbos-init-real.boot.log"
+    ls "$OUT"/gbos-init-real-shot-*.ppm 2>/dev/null | sed 's/^/screen: /' || :
+    # Markers from the kernel log (logcat never reaches it). bootanim exits
+    # when the framework shows its first screen; sys.boot_completed follows.
+    [ -s "$K2" ] || K2=$LOG
+    for p in "gbos-init: switching root" "init: init second stage started" "starting service 'zygote'" \
+             "starting service 'surfaceflinger'" "Service 'bootanim' (pid" \
+             "processing action (sys.boot_completed=1) from (/system/etc/init/hw/init.rc" \
+             "Unsupported zygote ABI" "InitFatalReboot"; do
+        printf '%-50s %s\n' "$p" "$(tr -d '\r' < "$K2" | grep -cF -- "$p" || :)"
     done
     exit 0
 fi
@@ -148,13 +187,31 @@ debugfs -R "cat /gbos/kmsg.log" $W/root.img 2>/dev/null | grep -q "gbos-init: sw
     && echo "ok   the kernel log copy persisted, past the root switch" \
     || { echo "FAIL the kernel log copy persisted, past the root switch"; rc=1; }
 
-# failure path: no images -> logged, then the machine goes down (poweroff here)
+fail_boot() {  # boot once more, expecting gbos-init to fail: fail_boot LOG
+    timeout 120 qemu-system-x86_64 -accel tcg -cpu Skylake-Client -smp 1 -m 512 -nographic -no-reboot \
+        -kernel $W/bzImage -initrd $W/ird.gz -drive file=$W/root.img,if=virtio,format=raw \
+        -append "$CMD" 2>&1 | tr -d '\r' > "$1" || :
+}
+
+# failure path: no modules for this kernel -> logged, machine goes down
+# (otherwise nothing loads and Android crash-loops instead)
 e2fsck -fy $W/root.img >/dev/null 2>&1 || :     # replay the journal the poweroff left
+M=/usr/lib/modules/$REL
+debugfs -w -R "link $M $M.off" $W/root.img >/dev/null 2>&1
+debugfs -w -R "unlink $M" $W/root.img >/dev/null 2>&1
+fail_boot $W/fail-mod.log
+if grep -q "gbos-init: FAILED: no modules for $REL" $W/fail-mod.log && grep -q "Power down" $W/fail-mod.log; then
+    echo "ok   missing modules are reported, then the machine goes down instead of booting Android without drivers"
+else echo "FAIL missing modules are reported, then the machine goes down"; tail -15 $W/fail-mod.log; rc=1; fi
+e2fsck -fy $W/root.img >/dev/null 2>&1 || :
+debugfs -w -R "link $M.off $M" $W/root.img >/dev/null 2>&1
+debugfs -w -R "unlink $M.off" $W/root.img >/dev/null 2>&1
+
+# failure path: no images -> logged, then the machine goes down (poweroff here)
+e2fsck -fy $W/root.img >/dev/null 2>&1 || :
 debugfs -w -R "rm /gbos/system.img" $W/root.img >/dev/null 2>&1
 debugfs -R "stat /gbos/system.img" $W/root.img 2>&1 | grep -q "File not found" || { echo "FAIL test setup: could not remove system.img"; rc=1; }
-timeout 120 qemu-system-x86_64 -accel tcg -cpu Skylake-Client -smp 1 -m 512 -nographic -no-reboot \
-    -kernel $W/bzImage -initrd $W/ird.gz -drive file=$W/root.img,if=virtio,format=raw \
-    -append "$CMD" 2>&1 | tr -d '\r' > $W/fail.log || :
+fail_boot $W/fail.log
 if grep -q "gbos-init: FAILED: /gbos/system.img is missing" $W/fail.log && grep -qE "reboot: Power down|Power down" $W/fail.log; then
     echo "ok   a missing image is reported, then the machine goes down instead of hanging"
 else echo "FAIL a missing image is reported, then the machine goes down"; tail -15 $W/fail.log; rc=1; fi

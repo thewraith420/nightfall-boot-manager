@@ -53,6 +53,8 @@ fi
 
 [ -f "$BOOT/vmlinuz-$release" ] || { echo "error: $BOOT/vmlinuz-$release does not exist" >&2; exit 1; }
 [ -f "$BOOT/initrd.img-$release" ] || { echo "error: $BOOT/initrd.img-$release does not exist" >&2; exit 1; }
+# gbos-init loads every driver from here and refuses to boot without it.
+[ -f "$ROOTPFX/lib/modules/$release/modules.dep" ] || { echo "error: $ROOTPFX/lib/modules/$release/modules.dep does not exist - the kernel's modules are not installed" >&2; exit 1; }
 cfg="$BOOT/config-$release"
 if [ -r "$cfg" ]; then
     missing=""
