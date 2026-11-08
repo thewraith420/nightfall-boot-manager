@@ -13,7 +13,12 @@
 # tree for the test root and depmod run on the copy. Needs gcc, mkfs.erofs,
 # mke2fs, debugfs, depmod, cpio, qemu-system-x86_64. About a minute, 512 MB.
 set -euo pipefail
-K=${1:?bzImage}; TREE=${2:?kernel build tree}
+K=${1:?bzImage}; TREE=${2:?kernel build tree}; IMAGES=${3:-}
+# Optional third argument: a directory with REAL images (system.img,
+# product.img, system_ext.img, vendor.img, optional bind/) from the GBOS image
+# builder. The fake checks are then replaced by a long run of Android's real
+# init with a virgl display (needs a host GPU and several GB of RAM), judged
+# from the kernel log the shim keeps in /gbos/kmsg.log.
 HERE=$(cd "$(dirname "$0")" && pwd); GB=$(cd "$HERE/.." && pwd)
 PATH=$PATH:/usr/sbin:/sbin
 for t in gcc mkfs.erofs mke2fs debugfs depmod cpio qemu-system-x86_64; do
@@ -61,18 +66,47 @@ cp $W/fakeinit $S/sys/system/bin/init
 ( cd $S/sys && ln -s /system/bin/init init && mkdir -p dev proc sys data metadata mnt second_stage_resources product system_ext vendor debug_ramdisk )
 echo "fake product" > $S/prod/MARKER; echo "fake system_ext" > $S/ext/MARKER; echo "fake vendor" > $S/ven/MARKER
 mkdir -p $RT/gbos
+if [ -n "$IMAGES" ]; then
+    # hard links where possible: mke2fs -d copies them into the root image anyway
+    for f in system product system_ext vendor; do
+        ln "$IMAGES/$f.img" $RT/gbos/$f.img 2>/dev/null || cp "$IMAGES/$f.img" $RT/gbos/$f.img; done
+    [ -d "$IMAGES/bind" ] && cp -a "$IMAGES/bind" $RT/gbos/bind
+else
 for n in system:sys product:prod system_ext:ext; do mkfs.erofs -zlz4hc "$RT/gbos/${n%%:*}.img" "$S/${n##*:}" >/dev/null; done
 mke2fs -q -t ext4 -O ^has_journal -d $S/ven $RT/gbos/vendor.img 16M
+fi
 install -m 0755 "$GB/gbos-init" $RT/gbos/gbos-init
+if [ -z "$IMAGES" ]; then
 mkdir -p $RT/gbos/bind/vendor $RT/gbos/bind/product; echo "replaced vendor" > $RT/gbos/bind/vendor/MARKER
 echo "no such file" > $RT/gbos/bind/product/NOT-THERE
+fi
 
-mke2fs -q -t ext4 -L testroot -d $RT $W/root.img 2G
+if [ -n "$IMAGES" ]; then mke2fs -q -t ext4 -L testroot -d $RT $W/root.img 24G; else mke2fs -q -t ext4 -L testroot -d $RT $W/root.img 2G; fi
 
 # --- the stand-in distro initramfs
 gcc -O2 -static -o $W/ird-init "$HERE/distro-initramfs.c"
 mkdir -p $W/ird; cp $W/ird-init $W/ird/init
 ( cd $W/ird && find . | cpio -o -H newc --quiet -R 0:0 ) | gzip -9 > $W/ird.gz
+
+if [ -n "$IMAGES" ]; then
+    LOG=${GBOS_TEST_LOG:-$PWD/gbos-init-real.log}
+    CMD="console=ttyS0 panic=-1 loglevel=7 printk.devkmsg=on rw init=/gbos/gbos-init gbos.fail=poweroff lsm=landlock,lockdown,yama,integrity,selinux enforcing=0 androidboot.hardware=android-desktop androidboot.hardware.platform=android-desktop"
+    echo "real images: guest ${GBOS_TEST_MEM:-3072} MB, up to ${GBOS_TEST_TIMEOUT:-2400}s, console in $LOG"
+    timeout "${GBOS_TEST_TIMEOUT:-2400}" qemu-system-x86_64 -accel tcg -cpu Skylake-Client -smp 2 -m "${GBOS_TEST_MEM:-3072}" \
+        -display egl-headless -device virtio-vga-gl -serial "file:$LOG" -no-reboot \
+        -kernel $W/bzImage -initrd $W/ird.gz -drive file=$W/root.img,if=virtio,format=raw \
+        -device qemu-xhci -device usb-kbd -append "$CMD" || :
+    e2fsck -fy $W/root.img >/dev/null 2>&1 || :
+    debugfs -R "dump /gbos/kmsg.log $PWD/gbos-init-real.kmsg.log" $W/root.img >/dev/null 2>&1
+    debugfs -R "dump /gbos/boot.log $PWD/gbos-init-real.boot.log" $W/root.img >/dev/null 2>&1
+    echo "kernel log copy: $PWD/gbos-init-real.kmsg.log, shim log: $PWD/gbos-init-real.boot.log"
+    K2="$PWD/gbos-init-real.kmsg.log"
+    for p in "gbos-init: switching root" "init: init second stage started" "starting service 'zygote" \
+             "starting service 'surfaceflinger" "System now ready" "setupwizard" "FAILED"; do
+        printf '%-40s %s\n' "$p" "$(cat "$LOG" "$K2" 2>/dev/null | tr -d '\r' | grep -c -- "$p")"
+    done
+    exit 0
+fi
 
 LOG=$W/console.log
 CMD="console=ttyS0 panic=-1 loglevel=7 printk.devkmsg=on rw init=/gbos/gbos-init gbos.fail=poweroff lsm=landlock,lockdown,yama,integrity,selinux enforcing=0"
