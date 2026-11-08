@@ -64,6 +64,8 @@ mkdir -p $RT/gbos
 for n in system:sys product:prod system_ext:ext; do mkfs.erofs -zlz4hc "$RT/gbos/${n%%:*}.img" "$S/${n##*:}" >/dev/null; done
 mke2fs -q -t ext4 -O ^has_journal -d $S/ven $RT/gbos/vendor.img 16M
 install -m 0755 "$GB/gbos-init" $RT/gbos/gbos-init
+mkdir -p $RT/gbos/bind/vendor $RT/gbos/bind/product; echo "replaced vendor" > $RT/gbos/bind/vendor/MARKER
+echo "no such file" > $RT/gbos/bind/product/NOT-THERE
 
 mke2fs -q -t ext4 -L testroot -d $RT $W/root.img 2G
 
@@ -86,7 +88,8 @@ chk 'FAKE: stray fds 0'                         "only fds 0-2 reach init"
 chk 'FAKE: mount /dev/loop[0-9]+ / erofs ro'    "the system image is the root, read-only"
 chk 'FAKE: product marker = fake product'       "product is mounted on top"
 chk 'FAKE: system_ext marker = fake system_ext' "system_ext is mounted on top"
-chk 'FAKE: vendor marker = fake vendor'         "vendor is mounted on top"
+chk 'FAKE: vendor marker = replaced vendor'     "vendor is mounted on top, and a bind/ file replaces its file"
+chk 'skipped'                                   "a bind/ file with nothing to replace is skipped, not created"
 chk 'FAKE: /system read-only'                   "/system cannot be written"
 chk 'FAKE: /data writable'                      "/data is writable"
 if grep -E 'FAKE: mount proc /proc proc ' $LOG | grep -q 'gid=3009' && grep -E 'FAKE: mount proc /proc proc ' $LOG | grep -qE 'hidepid=(2|invisible)'; then

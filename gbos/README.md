@@ -39,6 +39,7 @@ the image side is the GBOS project's `docs/baremetal/G3-G4-design.md`.
 |---|---|---|
 | `/gbos/{system,product,system_ext,vendor}.img` | GBOS image builder | the images |
 | `/gbos/data/` | `gbos-init`, first boot | Android's `/data` (plain directory) |
+| `/gbos/bind/<path>` | GBOS image builder, optional | bring-up replacements, each bound read-only over `/<path>` if that file exists, e.g. `bind/system/lib64/libselinux.so` (the permissive-only libselinux). The images stay byte-identical to the download |
 | `/gbos/root/` | `gbos-init` | empty mount point for the assembled root |
 | `/gbos/gbos-init` | `install-gbos-entry.sh` | the first stage |
 | `/gbos/boot.log`, `boot.log.1` | `gbos-init` | its own log, this boot and the previous one |

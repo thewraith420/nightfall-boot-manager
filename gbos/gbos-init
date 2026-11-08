@@ -168,6 +168,23 @@ mnt_img "$GBOS_DIR/product.img"    "$R/product"    erofs,ext4
 mnt_img "$GBOS_DIR/system_ext.img" "$R/system_ext" erofs,ext4
 mnt_img "$GBOS_DIR/vendor.img"     "$R/vendor"     ext4,erofs
 
+# Bring-up replacements: every file under $GBOS_DIR/bind/ is bound,
+# read-only, over the same path in the new root (e.g. bind/system/lib64/
+# libselinux.so, the permissive-only libselinux). This keeps the images
+# themselves byte-identical to the user's own download. Files only, and
+# only over files that exist, so a stray entry cannot create anything.
+if [ -d "$GBOS_DIR/bind" ]; then
+    ( cd "$GBOS_DIR/bind" && find . -type f ) | while read -r f; do
+        f=${f#./}
+        if [ -f "$R/$f" ]; then
+            mount --bind "$GBOS_DIR/bind/$f" "$R/$f" && mount -o remount,bind,ro "$R/$f" \
+                && log "bound bind/$f over /$f" || fail "bind $GBOS_DIR/bind/$f over /$f"
+        else
+            log "warning: bind/$f has no /$f to replace - skipped"
+        fi
+    done || fail "bind replacements"
+fi
+
 # What the stock first stage would have mounted (read from its binary).
 tmpfs_at() { mount -t tmpfs -o "$2" tmpfs "$R$1" || fail "tmpfs on $1"; }
 tmpfs_at /mnt                    nodev,noexec,nosuid,mode=0755,uid=0,gid=1000
