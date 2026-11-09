@@ -32,13 +32,14 @@ ROOTPFX=${GBOS_ROOT_PREFIX:-}     # tests only: where "/" is
     echo "42_gbos: $BOOT/gbos/{vmlinuz,initrd.img} are missing - re-run install-gbos-entry.sh" >&2; exit 0; }
 
 # The distro's own options, minus what must not reach Android: the splash
-# (its daemon would hold DRM master) and anything choosing security modules
+# (its daemon would hold DRM master; quiet stays, so the console is as terse
+# as the distro's, and the full log is in kmsg.log) and anything choosing security modules
 # (GBOS needs SELinux in lsm=, set below). i915.* and module_blacklist= stay:
 # a normal boot that lights the panel is proof of that set.
 distro_opts=""
 for o in ${GRUB_CMDLINE_LINUX:-} ${GRUB_CMDLINE_LINUX_DEFAULT:-}; do
     case "$o" in
-        quiet|splash|nosplash|vt.handoff=*|apparmor=*|security=*|lsm=*|selinux=*|enforcing=*|init=*|ro|rw|root=*) ;;
+        splash|nosplash|vt.handoff=*|apparmor=*|security=*|lsm=*|selinux=*|enforcing=*|init=*|ro|rw|root=*) ;;
         *) distro_opts="$distro_opts $o" ;;
     esac
 done

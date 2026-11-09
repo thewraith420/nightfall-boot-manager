@@ -21,6 +21,9 @@ the image side is the GBOS project's `docs/baremetal/G3-G4-design.md`.
    part: the Slate's eMMC driver is a module.
 4. `gbos-init`, a distro shell script, never GBOS userland, does the job of
    Android's first stage:
+   - unbinds the firmware framebuffer's DRM driver (simpledrm), so the GPU
+     becomes `/dev/dri/card0`: Android's composer scans card0, card1, ... and
+     stops at the first gap, so with i915 on card1 it finds no display;
    - loads drivers by modalias from this kernel's `/lib/modules`, plus a fixed
      preload list for hot-pluggable input;
    - mounts `system.img` as `/`, with product, system_ext and vendor read-only
@@ -51,14 +54,15 @@ the image side is the GBOS project's `docs/baremetal/G3-G4-design.md`.
 ## Install
 
 ```
-sudo gbos/install-gbos-entry.sh --release 7.2.15-BobZKernel-pixel-slate-dirty
+sudo gbos/install-gbos-entry.sh --release 7.2.15-BobZKernel-pixel-slate-gbos
 sudo gbos/install-gbos-entry.sh --remove      # images and data are left alone
 ```
 
 ## Expectations for the first boot
 
-The first boot compiles the system (dexopt) for several minutes before anything
-looks finished, so do not judge it by a short wait. If it reboots instead,
+The first boot compiles the system (dexopt) before anything looks finished, so
+do not judge it by a short wait. On the Slate it reached `sys.boot_completed` in
+about 3 minutes the first time and 1.5 minutes after that. If it reboots instead,
 `/gbos/boot.log` and `/gbos/kmsg.log` (and the `.1` copies) say why. Read them
 from the distro or from Nightfall.
 

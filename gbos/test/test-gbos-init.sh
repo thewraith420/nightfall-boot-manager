@@ -30,7 +30,7 @@ for t in gcc mkfs.erofs mke2fs debugfs depmod cpio qemu-system-x86_64; do
 vo=$(od -An -tu2 -j526 -N2 "$K" | tr -d ' ')
 REL=$(dd if="$K" bs=1 skip=$((vo + 512)) count=200 2>/dev/null | tr '\0' '\n' | head -1 | cut -d' ' -f1)
 [ -n "$REL" ] || { echo "cannot read the release from $K"; exit 2; }
-W=$(mktemp -d "${TMPDIR:-/tmp}/gbos-init-test.XXXXXX"); trap 'rm -rf "$W"' EXIT
+W=$(mktemp -d "${TMPDIR:-/tmp}/gbos-init-test.XXXXXX"); [ -n "${GBOS_TEST_KEEP:-}" ] || trap 'rm -rf "$W"' EXIT
 cp "$K" "$W/bzImage"                       # snapshot: the tree may be rebuilt meanwhile
 # Real-image mode only: GBOS_TEST_DISK=<file> keeps the test root there. If it
 # already exists it is booted again as it is, /data and all, which is how a
@@ -60,7 +60,7 @@ copy_bin() {  # copy a program and every library it links, keeping paths
         mkdir -p "$RT$(dirname "$l")"; cp -nL "$l" "$RT$l"
     done
 }
-for b in dash mount umount mountpoint kmod cat mv mkdir sleep sync find sort xargs wc grep tr cut uname chroot; do copy_bin $b; done
+for b in dash mount umount mountpoint kmod cat mv mkdir sleep sync find sort xargs wc grep tr cut uname chroot readlink ls; do copy_bin $b; done
 ln -sf dash $RT/usr/bin/sh
 for m in modprobe insmod lsmod depmod; do ln -sf ../bin/kmod $RT/usr/sbin/$m; done
 cp -n /lib64/ld-linux-x86-64.so.2 $RT/usr/lib64/ 2>/dev/null || cp -L /lib64/ld-linux-x86-64.so.2 $RT/usr/lib64/
@@ -149,10 +149,13 @@ fi
 
 LOG=$W/console.log
 CMD="console=ttyS0 panic=-1 loglevel=7 printk.devkmsg=on rw init=/gbos/gbos-init gbos.fail=poweroff lsm=landlock,lockdown,yama,integrity,selinux enforcing=0"
-timeout 300 qemu-system-x86_64 -accel tcg -cpu Skylake-Client -smp 2 -m 512 -nographic -no-reboot \
+# vga=0x318 + -vga std: a VESA framebuffer, so the built-in simpledrm takes
+# card0 at boot and bochs-drm (the PCI GPU, loaded by coldplug) comes second,
+# as simpledrm and i915 do on the Slate.
+timeout 300 qemu-system-x86_64 -accel tcg -cpu Skylake-Client -smp 2 -m 512 -nographic -vga std -no-reboot \
     -kernel $W/bzImage -initrd $W/ird.gz -drive file=$W/root.img,if=virtio,format=raw \
     -device qemu-xhci -device usb-kbd -device virtio-rng-pci \
-    -append "$CMD" 2>&1 | tr -d '\r' > $LOG || :
+    -append "$CMD vga=0x318" 2>&1 | tr -d '\r' > $LOG || :
 
 rc=0
 chk() { if grep -qE -- "$1" $LOG; then echo "ok   $2"; else echo "FAIL $2"; rc=1; fi; }
@@ -175,6 +178,9 @@ chk 'FAKE: firmware via bind = firmware from the distro root' "the distro's /lib
 chk 'FAKE: module usbhid loaded'                "preloaded: usbhid (USB keyboard plugged in later)"
 chk 'FAKE: module hid_multitouch loaded'        "preloaded: hid_multitouch (touch)"
 chk 'FAKE: module virtio_rng loaded'            "coldplug by modalias loaded a driver for a present device"
+chk 'simpledrm.*Initialized|Initialized simpledrm' "test setup: simpledrm took the firmware framebuffer first"
+chk 'gbos-init: unbound simple-framebuffer from simple-framebuffer.0' "the firmware framebuffer's DRM driver is unbound before coldplug"
+chk 'FAKE: card0 driver = bochs-drm'             "the GPU is card0, where Android's composer looks first"
 
 # what persisted on the distro root
 debugfs -R "cat /gbos/data/WRITE-TEST" $W/root.img 2>/dev/null | grep -q "written by android" \

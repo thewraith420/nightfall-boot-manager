@@ -128,6 +128,31 @@ modprobe_q() { modprobe -qab "$@" 2>/dev/null; }
 [ -f "/lib/modules/$(uname -r)/modules.dep" ] \
     || fail "no modules for $(uname -r) in /lib/modules - is the entry's kernel installed with its modules? (re-run install-gbos-entry.sh)"
 
+# The firmware framebuffer's DRM driver (simpledrm and its kin, built in)
+# registers first and takes /dev/dri/card0. The GPU driver loaded below then
+# becomes card1, and when it takes over the screen card0 goes away. Android's
+# composer (drm_hwcomposer) scans card0, card1, ... and stops at the first that
+# does not exist, so it finds no display: Android runs, the panel shows the
+# console. Seen on the Slate. Unbinding it first frees minor 0 for the GPU.
+# Only when a PCI display device exists, so a machine without one keeps it.
+fbdrm_unbind() {
+    grep -qs '^0x03' /sys/bus/pci/devices/*/class || return 0
+    for c in /sys/class/drm/card[0-9]*; do
+        [ -e "$c/device/driver" ] || continue
+        d=$(readlink -f "$c/device"); drv=$(readlink -f "$c/device/driver")
+        # a platform driver; the device itself sits under the GPU's PCI node
+        case "$drv" in /sys/bus/platform/drivers/*) ;; *) continue ;; esac
+        case "${drv##*/}" in
+            simple-framebuffer|simpledrm|efi-framebuffer|efidrm|vesa-framebuffer|vesadrm|ofdrm) ;;
+            *) continue ;;
+        esac
+        echo "${d##*/}" > "$drv/unbind" 2>/dev/null \
+            && log "unbound ${drv##*/} from ${d##*/} so the GPU becomes ${c##*/}" \
+            || log "warning: could not unbind ${drv##*/} from ${d##*/}"
+    done
+}
+fbdrm_unbind
+
 # Preloaded whatever the hardware: hot-pluggable classes. A device that
 # appears after Android starts only binds if its driver is already resident,
 # because Android's ueventd never looks in /lib/modules. Touch (i2c-hid) is
@@ -152,6 +177,12 @@ while [ $pass -lt 6 ]; do
 done
 for m in i915 erofs; do
     [ -d "/sys/module/$m" ] || log "warning: $m is not loaded (built in and named differently, or missing)"
+done
+if ls -d /sys/class/drm/card[0-9]* >/dev/null 2>&1 && [ ! -e /sys/class/drm/card0 ]; then
+    log "warning: no /dev/dri/card0 (have: $(cd /sys/class/drm && echo card[0-9]*)) - Android's composer will find no display"
+fi
+for b in /sys/class/backlight/*; do   # Android has no lights HAL here yet: this is what it gets
+    [ -r "$b/brightness" ] && log "backlight ${b##*/}: $(cat "$b/brightness")/$(cat "$b/max_brightness" 2>/dev/null)"
 done
 
 # --- 2. the images, as one system-as-root tree -----------------------------

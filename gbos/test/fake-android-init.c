@@ -31,6 +31,10 @@ int main(int argc, char **argv) {
 	f = fopen("/proc/modules", "r");
 	while (f && fgets(l, sizeof l, f)) { char m[64]; sscanf(l, "%63s", m); if (!strcmp(m, "usbhid") || !strcmp(m, "virtio_rng") || !strcmp(m, "hid_multitouch")) printf("FAKE: module %s loaded\n", m); }
 	if (f) fclose(f);
+	// what Android's composer gets: it scans /dev/dri/card0, card1, ... and stops at the first gap
+	{ char t[256] = ""; ssize_t k = readlink("/sys/class/drm/card0/device/driver", t, sizeof t - 1);
+	  if (k > 0) { t[k] = 0; printf("FAKE: card0 driver = %s\n", strrchr(t, '/') ? strrchr(t, '/') + 1 : t); }
+	  else printf("FAKE: card0 missing\n"); }
 	FILE *w = fopen("/data/WRITE-TEST", "w"); if (w) { fputs("written by android\n", w); fclose(w); printf("FAKE: /data writable\n"); }
 	printf("FAKE: /system %s\n", fopen("/system/x", "w") ? "WRITABLE (bad)" : "read-only");
 	struct stat st; printf("FAKE: /dev/socket %s, /dev/dm-user %s\n", stat("/dev/socket", &st) ? "missing" : "ok", stat("/dev/dm-user", &st) ? "missing" : "ok");
