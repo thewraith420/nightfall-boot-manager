@@ -181,8 +181,33 @@ done
 if ls -d /sys/class/drm/card[0-9]* >/dev/null 2>&1 && [ ! -e /sys/class/drm/card0 ]; then
     log "warning: no /dev/dri/card0 (have: $(cd /sys/class/drm && echo card[0-9]*)) - Android's composer will find no display"
 fi
-for b in /sys/class/backlight/*; do   # Android has no lights HAL here yet: this is what it gets
-    [ -r "$b/brightness" ] && log "backlight ${b##*/}: $(cat "$b/brightness")/$(cat "$b/max_brightness" 2>/dev/null)"
+# Backlight: restore the level the distro saved (systemd-backlight's own
+# file), as the distro does on every boot. Without it Android starts at
+# whatever the previous kernel left: through GRUB the panel comes up bright,
+# but kexec from Nightfall skips the reset and leaves it barely visible on the
+# Slate, and Android has no lights HAL to change it. A saved 0, or anything
+# under 5% of max, is not restored: a black panel looks like a dead boot.
+# Without a usable saved level, a panel under 10% goes to two thirds.
+for b in /sys/class/backlight/*; do
+    [ -r "$b/brightness" ] || continue
+    cur=$(cat "$b/brightness"); max=$(cat "$b/max_brightness" 2>/dev/null || echo 0)
+    saved=""
+    for s in /var/lib/systemd/backlight/*:backlight:"${b##*/}"; do
+        [ -r "$s" ] && saved=$(cat "$s")
+    done
+    case "$saved" in ""|*[!0-9]*) saved="" ;; esac
+    if [ -n "$saved" ] && [ "$max" -gt 0 ] && [ "$saved" -le "$max" ] && [ $((saved * 20)) -ge "$max" ]; then
+        echo "$saved" > "$b/brightness" 2>/dev/null \
+            && log "backlight ${b##*/}: $cur -> $saved/$max (the distro's saved level)" \
+            || log "warning: backlight ${b##*/}: could not set $saved (left at $cur/$max)"
+    elif [ "$max" -gt 0 ] && [ $((cur * 10)) -lt "$max" ]; then
+        new=$((max * 2 / 3))      # no saved level and nearly dark: two thirds
+        echo "$new" > "$b/brightness" 2>/dev/null \
+            && log "backlight ${b##*/}: $cur -> $new/$max (no usable saved level)" \
+            || log "warning: backlight ${b##*/}: could not set $new (left at $cur/$max)"
+    else
+        log "backlight ${b##*/}: $cur/$max (no usable saved level, left as it is)"
+    fi
 done
 
 # --- 2. the images, as one system-as-root tree -----------------------------
