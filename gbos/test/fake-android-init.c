@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
 	while (f && fgets(l, sizeof l, f)) if (strstr(l, " / ") || strstr(l, " /proc ") || strstr(l, " /data ") || strstr(l, " /vendor ") || strstr(l, "/sys/fs/selinux") || strstr(l, " /dev/pts ") || strstr(l, "gbos-fw")) printf("FAKE: mount %s", l);
 	if (f) fclose(f);
 	f = fopen("/proc/modules", "r");
-	while (f && fgets(l, sizeof l, f)) { char m[64]; sscanf(l, "%63s", m); if (!strcmp(m, "usbhid") || !strcmp(m, "virtio_rng") || !strcmp(m, "hid_multitouch")) printf("FAKE: module %s loaded\n", m); }
+	while (f && fgets(l, sizeof l, f)) { char m[64]; sscanf(l, "%63s", m); if (!strcmp(m, "usbhid") || !strcmp(m, "virtio_rng") || !strcmp(m, "hid_multitouch") || !strcmp(m, "ccm") || !strcmp(m, "cmac")) printf("FAKE: module %s loaded\n", m); }
 	if (f) fclose(f);
 	// what Android's composer gets: it scans /dev/dri/card0, card1, ... and stops at the first gap
 	{ char t[256] = ""; ssize_t k = readlink("/sys/class/drm/card0/device/driver", t, sizeof t - 1);

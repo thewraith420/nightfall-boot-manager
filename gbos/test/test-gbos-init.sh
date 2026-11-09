@@ -177,6 +177,8 @@ chk 'FAKE: firmware_class.path = /debug_ramdisk/gbos-fw' "firmware_class.path po
 chk 'FAKE: firmware via bind = firmware from the distro root' "the distro's /lib/firmware is readable from the new root"
 chk 'FAKE: module usbhid loaded'                "preloaded: usbhid (USB keyboard plugged in later)"
 chk 'FAKE: module hid_multitouch loaded'        "preloaded: hid_multitouch (touch)"
+chk 'FAKE: module ccm loaded'                   "preloaded: ccm (the Wi-Fi WPA2 key; Android disables on-demand loading)"
+chk 'FAKE: module cmac loaded'                  "preloaded: cmac (protected management frames, WPA3)"
 chk 'FAKE: module virtio_rng loaded'            "coldplug by modalias loaded a driver for a present device"
 chk 'simpledrm.*Initialized|Initialized simpledrm' "test setup: simpledrm took the firmware framebuffer first"
 chk 'gbos-init: unbound simple-framebuffer from simple-framebuffer.0' "the firmware framebuffer's DRM driver is unbound before coldplug"

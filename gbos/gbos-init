@@ -157,7 +157,12 @@ fbdrm_unbind
 # appears after Android starts only binds if its driver is already resident,
 # because Android's ueventd never looks in /lib/modules. Touch (i2c-hid) is
 # the Slate's main input; a USB keyboard or mouse may be plugged in later.
+# Crypto the kernel would otherwise load on demand, which Android turns off:
+# without ccm, Wi-Fi completes the WPA2 handshake and then fails to install
+# the key ("nl80211: kernel reports: key addition failed", seen on the
+# Slate); cmac is the same for protected management frames and WPA3.
 PRELOAD="hid hid_generic usbhid hid_multitouch i2c_hid i2c_hid_acpi cros_ec_keyb btusb btintel"
+PRELOAD="$PRELOAD ccm cmac gcm aesni_intel"
 # shellcheck disable=SC2086
 modprobe_q $PRELOAD $(echo "$GBOS_MODULES" | tr ',' ' ')
 
