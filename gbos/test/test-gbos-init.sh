@@ -60,7 +60,7 @@ copy_bin() {  # copy a program and every library it links, keeping paths
         mkdir -p "$RT$(dirname "$l")"; cp -nL "$l" "$RT$l"
     done
 }
-for b in dash mount umount mountpoint kmod cat mv mkdir sleep sync find sort xargs wc grep tr cut uname chroot readlink ls; do copy_bin $b; done
+for b in dash mount umount mountpoint kmod cat mv mkdir sleep sync find sort xargs wc grep tr cut uname chroot readlink ls mknod; do copy_bin $b; done
 ln -sf dash $RT/usr/bin/sh
 for m in modprobe insmod lsmod depmod; do ln -sf ../bin/kmod $RT/usr/sbin/$m; done
 cp -n /lib64/ld-linux-x86-64.so.2 $RT/usr/lib64/ 2>/dev/null || cp -L /lib64/ld-linux-x86-64.so.2 $RT/usr/lib64/
@@ -173,6 +173,13 @@ if grep -E 'FAKE: mount proc /proc proc ' $LOG | grep -q 'gid=3009' && grep -E '
 chk 'FAKE: mount selinuxfs /sys/fs/selinux'     "selinuxfs is mounted"
 chk 'FAKE: mount devpts /dev/pts'               "devpts is mounted"
 chk 'FAKE: /dev/socket ok, /dev/dm-user ok'     "/dev/socket and /dev/dm-user exist"
+chk 'FAKE: dev mount tmpfs /dev tmpfs'          "/dev is a fresh tmpfs, not the distro's devtmpfs"
+chk 'FAKE: node kmsg char 1:11 mode 600 uid 0'  "/dev/kmsg made as first stage makes it"
+chk 'FAKE: node null char 1:3 mode 666 uid 0'   "/dev/null made"
+chk 'FAKE: node urandom char 1:9 mode 666'      "/dev/urandom made"
+chk 'FAKE: node ptmx char 5:2 mode 666'         "/dev/ptmx made"
+chk 'FAKE: /dev/input absent'                   "no kernel-made input nodes: ueventd creates them with final modes"
+chk 'FAKE: /dev/null writable'                  "/dev/null works"
 chk 'FAKE: firmware_class.path = /debug_ramdisk/gbos-fw' "firmware_class.path points into the new root"
 chk 'FAKE: firmware via bind = firmware from the distro root' "the distro's /lib/firmware is readable from the new root"
 chk 'FAKE: module usbhid loaded'                "preloaded: usbhid (USB keyboard plugged in later)"

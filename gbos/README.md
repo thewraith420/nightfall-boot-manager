@@ -31,6 +31,11 @@ the image side is the GBOS project's `docs/baremetal/G3-G4-design.md`.
    - binds `/gbos/data` at `/data`;
    - binds `/lib/firmware` at `/debug_ramdisk/gbos-fw` and points
      `firmware_class.path` there;
+   - gives Android a fresh tmpfs `/dev` holding only what Android's first
+     stage makes (kmsg, null, random, urandom, ptmx, pts, socket, dm-user).
+     ueventd creates the rest with their final modes. The distro's devtmpfs
+     created hotplugged nodes `root:root 0600`, and Android ignored a USB
+     keyboard that lost that race;
    - switches root and execs `/system/bin/init selinux_setup`, with only fds
      0-2 open.
 5. On any failure before that exec, it logs the problem and reboots, so GRUB and

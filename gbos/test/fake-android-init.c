@@ -2,11 +2,13 @@
 // handed, in lines the test greps for, then powers off.
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 static void cat1(const char *tag, const char *p) {
 	char b[300]; FILE *f = fopen(p, "r");
@@ -38,5 +40,16 @@ int main(int argc, char **argv) {
 	FILE *w = fopen("/data/WRITE-TEST", "w"); if (w) { fputs("written by android\n", w); fclose(w); printf("FAKE: /data writable\n"); }
 	printf("FAKE: /system %s\n", fopen("/system/x", "w") ? "WRITABLE (bad)" : "read-only");
 	struct stat st; printf("FAKE: /dev/socket %s, /dev/dm-user %s\n", stat("/dev/socket", &st) ? "missing" : "ok", stat("/dev/dm-user", &st) ? "missing" : "ok");
+	// /dev as Android's first stage leaves it: tmpfs, a few nodes, nothing the kernel made
+	f = fopen("/proc/mounts", "r");
+	while (f && fgets(l, sizeof l, f)) if (strstr(l, " /dev ")) printf("FAKE: dev mount %s", l);
+	if (f) fclose(f);
+	{ const char *nd[] = { "kmsg", "null", "random", "urandom", "ptmx" };
+	  for (unsigned i = 0; i < sizeof nd / sizeof *nd; i++) { char p[64]; snprintf(p, sizeof p, "/dev/%s", nd[i]);
+	    if (stat(p, &st)) printf("FAKE: node %s missing\n", nd[i]);
+	    else printf("FAKE: node %s %s %u:%u mode %o uid %u\n", nd[i], S_ISCHR(st.st_mode) ? "char" : "NOT-CHAR",
+	                major(st.st_rdev), minor(st.st_rdev), st.st_mode & 07777, st.st_uid); } }
+	printf("FAKE: /dev/input %s\n", stat("/dev/input", &st) ? "absent (left to ueventd)" : "PRESENT (kernel-made)");
+	{ int fd = open("/dev/null", O_WRONLY); printf("FAKE: /dev/null %s\n", fd >= 0 && write(fd, "x", 1) == 1 ? "writable" : "BROKEN"); if (fd >= 0) close(fd); }
 	fflush(stdout); sync(); sleep(3); sync(); reboot(RB_POWER_OFF); return 0;
 }

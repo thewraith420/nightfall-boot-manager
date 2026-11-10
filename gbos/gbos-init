@@ -288,12 +288,28 @@ else
 fi
 
 # --- 4. pseudo filesystems, then the switch --------------------------------
-mkdir -p /dev/pts /dev/dm-user /dev/socket
-mountpoint -q /dev/pts || mount -t devpts devpts /dev/pts
 mountpoint -q /sys/fs/selinux || mount -t selinuxfs selinuxfs /sys/fs/selinux \
     || log "warning: selinuxfs did not mount - is selinux in lsm=? Android's init cannot load its policy without it"
 
-mount --move /dev "$R/dev" || fail "move /dev"
+# /dev: a fresh tmpfs with only the nodes Android's first stage makes. ueventd's
+# coldboot creates everything else, each node with its final owner and mode.
+# Moving the distro's devtmpfs in instead (as this did until 2026-11-10) gives
+# Android a /dev where the kernel creates every hotplugged node root:root 0600
+# and ueventd fixes it a moment later. system_server's EventHub opens a new
+# input node as soon as inotify reports it, got EACCES, and never retried, so a
+# USB keyboard plugged in while Android ran could be ignored (seen on the Slate
+# with a uinput test device: "EventHub: could not open /dev/input/event14,
+# Permission denied"). Devices present at boot were not affected, because
+# their modes were fixed before system_server started. The distro's devtmpfs
+# stays mounted in the old root, out of Android's sight; the kernel-log copier
+# above keeps the /dev/kmsg it already opened.
+mount -t tmpfs -o nosuid,mode=0755 tmpfs "$R/dev" || fail "tmpfs on /dev"
+for n in "kmsg 0600 1 11" "null 0666 1 3" "random 0666 1 8" "urandom 0666 1 9" "ptmx 0666 5 2"; do
+    set -- $n
+    mknod -m "$2" "$R/dev/$1" c "$3" "$4" || fail "mknod /dev/$1"
+done
+mkdir -m 0755 "$R/dev/pts" "$R/dev/socket" "$R/dev/dm-user" || fail "/dev directories"
+mount -t devpts devpts "$R/dev/pts" || fail "devpts"
 KMSG=$R/dev/kmsg
 mount --move /sys "$R/sys" || fail "move /sys"
 # A fresh proc, mounted the way Android's first stage mounts it (readproc
