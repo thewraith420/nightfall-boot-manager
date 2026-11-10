@@ -170,6 +170,12 @@ save_log() {
         # Rescan from the menu - with the reason for each drive it kept or
         # skipped. Without this a Rescan that finds nothing looks exactly
         # like one that never ran.
+        # Only present when the root needed repair to mount this boot.
+        if [ -s /run/nightfall/root-fsck.log ]; then
+            echo "--- root filesystem repair (before mounting) ---"
+            cat /run/nightfall/root-fsck.log
+            echo
+        fi
         echo "--- drive scans (startup and every Rescan) ---"
         if [ -s /run/nightfall/scan.log ]; then cat /run/nightfall/scan.log; else echo "(no scan output)"; fi
         echo
@@ -380,8 +386,68 @@ export REAL_ROOT_DEV
 # no-op the moment self-discovery above already found and mounted it.
 wait_for "root device" "$REAL_ROOT_DEV" "${NIGHTFALL_WAIT_ROOT:-15}"
 stage "mounting real root ($REAL_ROOT_DEV)"
+
+# A root that will not mount read-only is, in practice, an ext4 left
+# dirty by a crash. The kernel refuses a read-only mount when the orphan
+# file is not empty ("Orphan file not empty on read-only fs") or a group
+# fails its checksum, because both need writes to resolve. Ubuntu's own
+# initramfs gets past this by running fsck before it mounts. Nightfall
+# only ever mounted read-only, so the same disk Ubuntu booted fine
+# dropped Nightfall to a rescue shell (Slate, 2026-11-09, after a kernel
+# panic under GBOS). find-real-root.sh still finds such a disk: its
+# probe mounts with noload, which this mount must not use, because the
+# kernel and initramfs are read through it.
+#
+# Nothing has the device open here (the mount failed), so e2fsck has it
+# to itself. That is the one state where a repair is safe; fsck-root.sh
+# has the long version. Two passes:
+#   -p  fixes what needs no decision. Enough for the crash case above.
+#   -y  only if -p met something it would not decide (exit 4). It can
+#       move damaged files to lost+found, which is why the Repair menu
+#       keeps it a separate action. Here the alternative is a machine
+#       that does not boot at all, and a rescue shell where the same
+#       command is the obvious next step.
+# Exit 8 (not ext2/3/4, or unreadable) changes nothing and falls through
+# to the rescue shell, as before. e2fsck refuses a mounted filesystem on
+# its own, so a device in use elsewhere is safe too.
+ROOT_FSCK_LOG=/run/nightfall/root-fsck.log
+root_fsck() {
+    _frc=0
+    echo "=== e2fsck $1 $REAL_ROOT_DEV" >> "$ROOT_FSCK_LOG"
+    /sbin/e2fsck "$1" "$REAL_ROOT_DEV" >> "$ROOT_FSCK_LOG" 2>&1 || _frc=$?
+    stage "e2fsck $1 exited $_frc"
+    return "$_frc"
+}
+heal_root() {
+    [ -x /sbin/e2fsck ] || { warn "no e2fsck in this image - cannot repair the root filesystem"; return 1; }
+    mkdir -p /run/nightfall 2>/dev/null
+    warn "the root filesystem ($REAL_ROOT_DEV) will not mount - checking and repairing it"
+    warn "this can take a few minutes; please do not power off"
+    _hrc=0
+    root_fsck -p || _hrc=$?
+    if [ "$_hrc" = 4 ]; then
+        warn "the safe check left errors it would not decide on - running a full repair"
+        _hrc=0
+        root_fsck -y || _hrc=$?
+    fi
+    # A bitmask: 1-3 are repairs that worked, not failures.
+    case "$_hrc" in
+        0|1|2|3) ;;
+        *) warn "e2fsck could not repair it (exit $_hrc)"
+           tail -n 15 "$ROOT_FSCK_LOG" >&2 2>/dev/null
+           return 1 ;;
+    esac
+    if mount -o ro "$REAL_ROOT_DEV" /mnt/root; then
+        warn "repaired (e2fsck exit $_hrc) - the root filesystem mounts again"
+        return 0
+    fi
+    warn "e2fsck finished (exit $_hrc) but the root still does not mount"
+    tail -n 15 "$ROOT_FSCK_LOG" >&2 2>/dev/null
+    return 1
+}
+
 if ! mount -o ro "$REAL_ROOT_DEV" /mnt/root; then
-    rescue "failed to mount real root ($REAL_ROOT_DEV)"
+    heal_root || rescue "failed to mount real root ($REAL_ROOT_DEV)"
 fi
 
 if [ "$BOOT_LAYOUT" = bootfs ]; then

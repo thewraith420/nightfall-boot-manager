@@ -629,6 +629,16 @@ still mounted, because recovery mode **is** the system on that disk, and
 nothing from the root once the menu is drawn, so it unmounts the root entirely
 and hands `e2fsck` a filesystem nobody is touching.
 
+**A root that will not mount is repaired automatically, before the menu.**
+After a crash, a dirty ext4 can refuse the read-only mount Nightfall uses (for
+example "Orphan file not empty on read-only fs"). Ubuntu's initramfs gets past
+this because it runs fsck first. Nightfall used to drop to a rescue shell instead.
+Now `init` runs `e2fsck -p` on the unmounted device. Only if that leaves errors
+it will not decide on does it run `e2fsck -y`. Then it mounts again. It says so
+on screen, and e2fsck's output goes into `nightfall-last-boot.log`. A
+filesystem e2fsck cannot handle (exit 8 and up), or one that still does not
+mount, still ends at the rescue shell.
+
 **Boot an external drive** (listed right on the **Boot** screen, alongside
 installed kernels) closes the gap none of the above can: a wiped or
 unbootable disk. `scan-drives.sh`'s own header explains why a USB drive

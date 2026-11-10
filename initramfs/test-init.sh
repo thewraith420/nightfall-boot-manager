@@ -66,11 +66,14 @@ setup() {
   esac
 
   # --- mocks -------------------------------------------------------
+  # A root that fails to mount succeeds once a mock e2fsck has "repaired"
+  # it (it leaves $SB/fsck-fixed), and mounting it is what makes boot/.
   cat > "$SB/bin/mount" <<EOF
 #!/bin/sh
 case "\$*" in
   *remount*) exit 0 ;;
-  *rootdev*) exit $3 ;;
+  *rootdev*) [ -f "$SB/fsck-fixed" ] && { mkdir -p "$SB/mnt/root/boot"; exit 0; }
+             exit $3 ;;
 esac
 exit 0
 EOF
@@ -392,6 +395,54 @@ setup mountfail ok 1 0; run
 both | grep -q "MARKER_RESCUE_SHELL_REACHED" && ok "drops to rescue shell" || bad "no rescue shell"
 both | grep -q "cannot save a boot log"      && ok "explains the missing log" || bad "silent about no log"
 both | grep -q "MARKER_KEXEC"                && bad "kexec'd despite no root!" || ok "does not kexec"
+
+# $1 = e2fsck exit for -p, $2 = for -y, $3 = "fixes" if a successful
+# run makes the root mountable again. Records every call.
+fsck_mock() {
+  cat > "$SB/sbin/e2fsck" <<EOF
+#!/bin/sh
+echo "E2FSCK \$*" >> "$SB/fsck-calls"
+echo "MARKER_FSCK_OUTPUT \$1"
+case "\$1" in -p) rc=$1 ;; -y) rc=$2 ;; *) rc=16 ;; esac
+case "\$rc" in 0|1|2|3) [ "$3" = fixes ] && : > "$SB/fsck-fixed" ;; esac
+exit \$rc
+EOF
+  chmod +x "$SB/sbin/e2fsck"
+}
+calls() { cat "$SB/fsck-calls" 2>/dev/null; }
+
+echo "=== 4b. root will not mount, e2fsck -p repairs it -> boots ==="
+setup heal ok 1 0; fsck_mock 1 99 fixes; run
+calls | grep -qx "E2FSCK -p $SB/dev/rootdev" && ok "ran e2fsck -p on the root device" || bad "no e2fsck -p: [$(calls)]"
+calls | grep -q  "E2FSCK -y"                 && bad "escalated to -y although -p repaired it" || ok "did not escalate"
+both  | grep -q  "MARKER_KEXEC.*vmlinuz-chosen" && ok "boots after the repair" || bad "did not boot after repair"
+both  | grep -q  "MARKER_RESCUE"             && bad "still dropped to rescue" || ok "no rescue shell"
+both  | grep -q  "checking and repairing it" && ok "says on screen it is repairing" || bad "repair was silent on screen"
+log   | grep -q  "root filesystem repair"    && ok "boot log has a repair section" || bad "no repair section in the log"
+log   | grep -q  "MARKER_FSCK_OUTPUT -p"     && ok "boot log carries e2fsck's own output" || bad "e2fsck output missing from the log"
+
+echo "=== 4c. -p leaves errors (exit 4) -> full repair with -y -> boots ==="
+setup heal ok 1 0; fsck_mock 4 1 fixes; run
+[ "$(calls | awk '{print $2}' | tr '\n' ' ')" = "-p -y " ] && ok "ran -p, then -y" || bad "passes wrong: [$(calls)]"
+both  | grep -q  "running a full repair"     && ok "says it is escalating" || bad "escalated silently"
+both  | grep -q  "MARKER_KEXEC.*vmlinuz-chosen" && ok "boots after the full repair" || bad "did not boot"
+
+echo "=== 4d. not ext4 / unreadable (exit 8) -> rescue, no -y ==="
+setup heal ok 1 0; fsck_mock 8 1 fixes; run
+calls | grep -q  "E2FSCK -y"                 && bad "ran -y after exit 8" || ok "no -y after exit 8"
+both  | grep -q  "MARKER_RESCUE_SHELL_REACHED" && ok "drops to rescue" || bad "no rescue"
+both  | grep -q  "could not repair it (exit 8)" && ok "says why" || bad "no reason on screen"
+both  | grep -q  "MARKER_KEXEC"              && bad "kexec'd without a root" || ok "does not kexec"
+
+echo "=== 4e. e2fsck reports success but the root still will not mount -> rescue ==="
+setup heal ok 1 0; fsck_mock 1 1 nofix; run
+both  | grep -q  "still does not mount"      && ok "says the mount still fails" || bad "no message"
+both  | grep -q  "MARKER_RESCUE_SHELL_REACHED" && ok "drops to rescue" || bad "no rescue"
+calls | grep -q  "E2FSCK -y"                 && bad "ran -y although -p reported success" || ok "no -y after a reported success"
+
+echo "=== 4f. a root that mounts first time never sees e2fsck ==="
+setup happy ok 0 0; fsck_mock 1 1 fixes; run
+[ -s "$SB/fsck-calls" ] && bad "ran e2fsck on a healthy root" || ok "no e2fsck on a healthy root"
 
 echo "=== 5. discovery fails -> rescue, root mounted so log survives ==="
 setup discfail ok 0 1; run
