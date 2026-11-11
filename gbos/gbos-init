@@ -163,6 +163,12 @@ fbdrm_unbind
 # Slate); cmac is the same for protected management frames and WPA3.
 PRELOAD="hid hid_generic usbhid hid_multitouch i2c_hid i2c_hid_acpi cros_ec_keyb btusb btintel"
 PRELOAD="$PRELOAD ccm cmac gcm aesni_intel"
+# Android's VMs (the Linux Terminal app, crosvm): vhost_vsock is how the guest
+# talks to Android and vhost_net carries its network. Both are modules that a
+# distro loads on demand when /dev/vhost-vsock or /dev/vhost-net is opened,
+# through kmod's static nodes. Android's fresh /dev has no static nodes, so
+# nothing ever loads them. kvm_intel needs no entry: it loads by CPU modalias.
+PRELOAD="$PRELOAD vhost_vsock vhost_net"
 # shellcheck disable=SC2086
 modprobe_q $PRELOAD $(echo "$GBOS_MODULES" | tr ',' ' ')
 
